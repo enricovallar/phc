@@ -99,6 +99,7 @@ def run_hex_2d_pipeline(
         pitch=pitch,
         dimension="2D",
         etch_material="air",
+        geometry_lattice=lattice,
     )
     print(f"      -> Extracted {len(geometry)} geometric prism(s) from GDS.")
 

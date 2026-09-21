@@ -1,3 +1,5 @@
+"""phc_mpb: Photonic Crystal band structure solver and GDS converter based on MPB."""
+
 from phc_mpb.converter import (
     extract_polygons_from_gds,
     gds_to_mpb_geometry,
@@ -5,6 +7,8 @@ from phc_mpb.converter import (
 from phc_mpb.lattice import (
     create_lattice,
     get_high_symmetry_kpath,
+    lattice_to_mpb_lattice,
+    to_mpb_lattice,
 )
 from phc_mpb.plotting import (
     plot_band_structure,
@@ -23,7 +27,9 @@ __all__ = [
     "gds_to_mpb_geometry",
     "get_epsilon_grid",
     "get_high_symmetry_kpath",
+    "lattice_to_mpb_lattice",
     "plot_band_structure",
     "plot_epsilon",
     "run_band_solver",
+    "to_mpb_lattice",
 ]

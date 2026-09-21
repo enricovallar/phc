@@ -1,0 +1,13 @@
+# @package geometry
+name: c4v_cross_4e
+point_group: C4v
+lattice_type: square
+pitch_um: 0.5
+background_material: si
+etch_material: air
+dimension: 2D
+slab_thickness_um: 0.22
+features:
+  - position: 4e
+    radius_ratio: 0.12
+    param: 0.30

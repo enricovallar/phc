@@ -1,9 +1,18 @@
 defaults:
   - simulation: mpb
-  - geometry: triangular_lattice
+  - geometry: c6v_primitive
   - _self_
 
-# Global simulation parameters
-output_dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+# Hierarchical output directory structure: outputs/<solver>/<sim_type>/<geometry>/<timestamp>
+output_dir: outputs/${simulation.solver}/${simulation.sim_type}/${geometry.name}/${now:%Y-%m-%d_%H-%M-%S}
 save_plots: true
+save_gds: true
+save_results: true
 verbose: true
+
+hydra:
+  run:
+    dir: ${output_dir}
+  sweep:
+    dir: outputs/${simulation.solver}/${simulation.sim_type}/${geometry.name}/multirun_${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}

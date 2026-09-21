@@ -129,11 +129,17 @@ def plot_epsilon(
     cmap: str = "viridis",
     colorbar: bool = True,
     save_path: str | Path | None = None,
+    extent: tuple[float, float, float, float] | None = None,
+    xlabel: str = "Grid X",
+    ylabel: str = "Grid Y",
 ) -> plt.Figure:
     """Plots the 2D dielectric permittivity distribution grid retrieved from MPB.
 
     If a 3D permittivity array is passed, extracts and plots the 2D cross-section at the
-    mid-plane (z = N_z // 2).
+    mid-plane (z = N_z // 2). Transposes the 2D array prior to rendering with `imshow`
+    because MPBData returns dimension 0 along Cartesian X and dimension 1 along Cartesian Y,
+    whereas Matplotlib maps array dimension 0 to vertical rows (Y) and dimension 1 to horizontal
+    columns (X).
 
     Args:
         epsilon: 2D or 3D numpy array containing dielectric permittivity values epsilon(r).
@@ -142,6 +148,9 @@ def plot_epsilon(
         colorbar: If True, adds a labeled colorbar showing permittivity scale.
         save_path: Optional file path (PNG, PDF, SVG) where figure will be saved.
             Parent directories are created automatically if they do not exist.
+        extent: Optional 4-tuple (xmin, xmax, ymin, ymax) setting the physical plot coordinates.
+        xlabel: Label for horizontal axis (default: "Grid X").
+        ylabel: Label for vertical axis (default: "Grid Y").
 
     Returns:
         The matplotlib Figure object containing the rendered permittivity plot.
@@ -162,9 +171,12 @@ def plot_epsilon(
     else:
         data = epsilon
 
+    # Transpose data so that dim 0 (X) is along columns (horizontal)
+    # and dim 1 (Y) is along rows (vertical).
     im = ax.imshow(
-        data,
+        data.T,
         origin="lower",
+        extent=extent,
         cmap=cmap,
         interpolation="bilinear",
         aspect="equal",
@@ -175,8 +187,8 @@ def plot_epsilon(
         cbar.set_label(r"Permittivity $\varepsilon$", fontsize=11)
 
     ax.set_title(title, fontsize=12, fontweight="bold")
-    ax.set_xlabel("Grid X", fontsize=10)
-    ax.set_ylabel("Grid Y", fontsize=10)
+    ax.set_xlabel(xlabel, fontsize=10)
+    ax.set_ylabel(ylabel, fontsize=10)
 
     plt.tight_layout()
 

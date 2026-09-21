@@ -62,8 +62,13 @@ def gds_to_mpb_geometry(
     z_center: float = 0.0,
     etch_layer: tuple[int, int] = (1, 0),
     etch_material: str = "air",
+    geometry_lattice: Any = None,
 ) -> list[Any]:
-    """Converts GDS polygons on the etch layer into a list of MPB Prisms.
+    """Converts GDS polygons on the etch layer into a list of MPB Prisms or Cylinders.
+
+    Coordinates extracted from the GDS layout are physical Cartesian coordinates. If a
+    `geometry_lattice` is provided, coordinates are transformed into the lattice vector
+    basis required by MPB geometric objects via `mp.cartesian_to_lattice`.
 
     Args:
         gds_source: Path to .gds file or a gdsfactory.Component.
@@ -73,9 +78,12 @@ def gds_to_mpb_geometry(
         z_center: Vertical center of slab in microns.
         etch_layer: (layer, datatype) of the holes.
         etch_material: Material key for the holes (defaults to "air").
+        geometry_lattice: Optional mp.Lattice or phc_layout.lattice.Lattice instance
+            defining the simulation basis vectors. If provided, coordinates are transformed
+            from Cartesian to the lattice vector basis.
 
     Returns:
-        List of mp.Prism objects (or dict representations if meep is not installed).
+        List of mp.GeometricObject instances (Cylinder or Prism).
     """
     # 1. Extract polygon objects in microns
     dbu = 0.001
@@ -94,13 +102,25 @@ def gds_to_mpb_geometry(
 
     import meep as mp
 
-    # 2. Compute dimensionless heights and centers
+    # Normalize geometry_lattice if phc_layout.lattice.Lattice was passed
+    geom_lat = None
+    if geometry_lattice is not None:
+        if not hasattr(geometry_lattice, "basis1"):
+            from phc_mpb.lattice import lattice_to_mpb_lattice
+
+            geom_lat = lattice_to_mpb_lattice(
+                geometry_lattice, dimension=dimension, normalize=True
+            )
+        else:
+            geom_lat = geometry_lattice
+
+    # 2. Compute dimensionless heights and base z-positions
     if dimension == "2D":
         prism_height = mp.inf
-        prism_center = mp.Vector3(0, 0, 0)
+        z_base = 0.0
     else:
         prism_height = slab_thickness / pitch
-        prism_center = mp.Vector3(0, 0, z_center / pitch)
+        z_base = (z_center - 0.5 * slab_thickness) / pitch
 
     medium = to_mpb_medium(etch_material)
 
@@ -126,6 +146,9 @@ def gds_to_mpb_geometry(
                 centroid[1] / pitch,
                 0.0 if dimension == "2D" else z_center / pitch,
             )
+            if geom_lat is not None:
+                cyl_center = mp.cartesian_to_lattice(cyl_center, geom_lat)
+
             cyl = mp.Cylinder(
                 radius=r_mean / pitch,
                 height=prism_height,
@@ -150,11 +173,20 @@ def gds_to_mpb_geometry(
                 unique_pts.pop()
 
             scaled_pts = [(x / pitch, y / pitch) for x, y in unique_pts]
-            v_list = [mp.Vector3(x, y, 0) for x, y in scaled_pts]
+            if geom_lat is not None:
+                v_list = [
+                    mp.cartesian_to_lattice(mp.Vector3(x, y, z_base), geom_lat)
+                    for x, y in scaled_pts
+                ]
+            else:
+                v_list = [mp.Vector3(x, y, z_base) for x, y in scaled_pts]
+
+            # Note: In mp.Prism, omitting center keeps vertices unshifted at (x, y, z_base).
+            # Passing center causes Meep to translate vertices by (center - centroid - 0.5*height*axis),
+            # which for height=1e+20 causes catastrophic floating-point cancellation at -5e+19.
             prism = mp.Prism(
                 vertices=v_list,
                 height=prism_height,
-                center=prism_center,
                 material=medium,
             )
             objects.append(prism)

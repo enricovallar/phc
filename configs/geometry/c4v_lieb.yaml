@@ -1,0 +1,10 @@
+# @package geometry
+name: c4v_lieb
+point_group: C4v
+lattice_type: square
+pitch_um: 0.5
+radius_ratio: 0.18
+background_material: si
+etch_material: air
+dimension: 2D
+slab_thickness_um: 0.22

@@ -1,16 +1,21 @@
 import numpy as np
+import pytest
 from phc_layout.components import (
+    get_unit_cell,
     phc_hexagonal_unit_cell,
     phc_square_unit_cell,
 )
+from phc_layout.lattice import HexagonalLattice, SquareLattice
 from phc_mpb import (
     create_lattice,
     create_mode_solver,
     gds_to_mpb_geometry,
     get_epsilon_grid,
     get_high_symmetry_kpath,
+    lattice_to_mpb_lattice,
     plot_band_structure,
     plot_epsilon,
+    to_mpb_lattice,
 )
 
 
@@ -111,3 +116,79 @@ def test_get_epsilon_and_plot(tmp_path):
     fig = plot_epsilon(eps, save_path=out_eps_png)
     assert out_eps_png.is_file()
     assert fig is not None
+
+
+def test_lattice_to_mpb_lattice_hexagonal():
+    layout_lat = HexagonalLattice(a=0.5)
+    mpb_lat = lattice_to_mpb_lattice(layout_lat, dimension="2D")
+    assert mpb_lat is not None
+
+    # Verify basis vectors are normalized (a = 1)
+    b1 = mpb_lat.basis1
+    b2 = mpb_lat.basis2
+    assert np.isclose(b1.x, 1.0)
+    assert np.isclose(b1.y, 0.0)
+    assert np.isclose(b2.x, -0.5)
+    assert np.isclose(b2.y, np.sqrt(3.0) / 2.0)
+    assert mpb_lat.size.z == 0.0
+
+    # Test 3D slab
+    mpb_slab = lattice_to_mpb_lattice(layout_lat, dimension="3D_slab", supercell_z=7.0)
+    assert mpb_slab.size.z == 7.0
+
+
+def test_lattice_to_mpb_lattice_square():
+    layout_lat = SquareLattice(a=0.4)
+    mpb_lat = to_mpb_lattice(layout_lat, dimension="2D")
+    b1 = mpb_lat.basis1
+    b2 = mpb_lat.basis2
+    assert np.isclose(b1.x, 1.0)
+    assert np.isclose(b1.y, 0.0)
+    assert np.isclose(b2.x, 0.0)
+    assert np.isclose(b2.y, 1.0)
+
+
+def test_create_lattice_with_lattice_object():
+    layout_lat = HexagonalLattice(a=0.5)
+    mpb_lat = create_lattice(layout_lat, dimension="2D")
+    assert np.isclose(mpb_lat.basis1.x, 1.0)
+    assert np.isclose(mpb_lat.basis2.x, -0.5)
+
+
+def test_lattice_to_mpb_type_error():
+    with pytest.raises(TypeError, match="Expected phc_layout.lattice.Lattice"):
+        lattice_to_mpb_lattice("invalid_lattice")  # type: ignore[arg-type]
+
+
+def test_kpath_with_layout_lattice_objects():
+    hex_lat = HexagonalLattice(a=0.5)
+    k_pts, labels, _indices = get_high_symmetry_kpath(hex_lat, k_density=10)
+    assert labels == ["Γ", "M", "K", "Γ"]
+    assert len(k_pts) > len(labels)
+
+    sq_lat = SquareLattice(a=0.5)
+    k_pts_sq, labels_sq, _ = get_high_symmetry_kpath(sq_lat, k_density=10)
+    assert labels_sq == ["Γ", "X", "M", "Γ"]
+    assert len(k_pts_sq) > len(labels_sq)
+
+
+def test_mode_solver_with_layout_lattice_and_database_cell():
+    """End-to-end test connecting phc_layout.lattice, unit cell database, and MPB solver."""
+    pitch = 0.5
+    layout_lat = HexagonalLattice(a=pitch)
+    mpb_lat = lattice_to_mpb_lattice(layout_lat, dimension="2D")
+
+    # Get unit cell from database
+    cell = get_unit_cell("c6v_primitive", pitch=pitch, radius=0.125)
+    geom = gds_to_mpb_geometry(cell, pitch=pitch, dimension="2D")
+    k_pts, _, _ = get_high_symmetry_kpath(layout_lat, k_density=3)
+
+    ms = create_mode_solver(
+        geometry_lattice=mpb_lat,
+        geometry=geom,
+        k_points=k_pts,
+        default_material="si",
+        resolution=8,
+        num_bands=4,
+    )
+    assert ms is not None

@@ -1,6 +1,8 @@
 # @package simulation
 solver: mpb
+sim_type: band_diagram
 num_bands: 8
 resolution: 32
-k_points_density: 20
-polarization: te  # or tm
+k_density: 16
+polarization: te  # Options: 'te', 'tm', or 'both'
+quick: false

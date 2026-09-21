@@ -1,0 +1,18 @@
+[project]
+name = "phc-utils"
+version = "0.1.0"
+description = "Shared cross-package interfuse utilities, safe I/O, and physical conversions for phc"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "numpy>=1.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

@@ -1,0 +1,15 @@
+# @package geometry
+name: c6v_snowflake_6d
+point_group: C6v
+lattice_type: hexagonal
+pitch_um: 0.5
+background_material: si
+etch_material: air
+dimension: 2D
+slab_thickness_um: 0.22
+features:
+  - position: 1a
+    radius_ratio: 0.20
+  - position: 6d
+    radius_ratio: 0.10
+    param: 0.35
