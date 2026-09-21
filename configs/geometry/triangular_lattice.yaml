@@ -1,0 +1,8 @@
+# @package geometry
+type: triangular_lattice_slab
+lattice_constant_nm: 420
+radius_over_a: 0.25
+slab_thickness_nm: 220
+refractive_index_slab: 3.48  # Silicon at ~1550nm
+refractive_index_cladding: 1.0  # Air
+supercell_size: [1, 1]

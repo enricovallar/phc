@@ -1,0 +1,11 @@
+# @package simulation
+solver: lumerical_fdtd
+mesh_accuracy: 3
+simulation_time_fs: 500
+dimension: 3D  # 2D or 3D
+boundary_conditions:
+  x: PML
+  y: PML
+  z: PML
+save_fsp: true
+hide_gui: true

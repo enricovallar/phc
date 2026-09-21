@@ -1,0 +1,6 @@
+# @package simulation
+solver: mpb
+num_bands: 8
+resolution: 32
+k_points_density: 20
+polarization: te  # or tm

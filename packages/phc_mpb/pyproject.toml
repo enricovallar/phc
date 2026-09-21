@@ -1,0 +1,22 @@
+[project]
+name = "phc-mpb"
+version = "0.1.0"
+description = "General Photonic Crystal band structure solver and GDS converter based on MIT Photonic Bands (MPB)"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "phc-materials",
+    "phc-layout",
+    "numpy>=1.24.0",
+    "gdstk>=0.9.0",
+    "matplotlib>=3.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

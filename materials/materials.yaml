@@ -1,0 +1,47 @@
+version: "1.0"
+
+materials:
+  air:
+    type: isotropic
+    index: 1.0
+    lumerical_name: "etch"
+    description: "Air / Vacuum"
+
+  si:
+    type: isotropic
+    index: 3.48
+    lumerical_name: "Si (Silicon) - Palik"
+    description: "Silicon at 1550 nm"
+
+  sio2:
+    type: isotropic
+    index: 1.444
+    lumerical_name: "SiO2 (Glass) - Palik"
+    description: "Silicon Dioxide at 1550 nm"
+
+  sin:
+    type: isotropic
+    index: 2.00
+    lumerical_name: "Si3N4 - Philip"
+    description: "Silicon Nitride at 1550 nm"
+
+  lnoi_xcut:
+    type: anisotropic
+    indices: [2.203, 2.286, 2.286]  # [nx=ne, ny=no, nz=no] at 1550nm
+    rotation_deg: 0.0
+    lumerical_name: "LN_Xcut"
+    description: "X-cut Lithium Niobate (optic axis along X)"
+
+  lnoi_zcut:
+    type: anisotropic
+    indices: [2.286, 2.286, 2.203]  # [nx=no, ny=no, nz=ne] at 1550nm
+    rotation_deg: 0.0
+    lumerical_name: "LN_Zcut"
+    description: "Z-cut Lithium Niobate (optic axis along Z)"
+
+  batio3:
+    type: anisotropic
+    indices: [2.35, 2.35, 2.30]
+    rotation_deg: 0.0
+    lumerical_name: "BaTiO3_Custom"
+    description: "Barium Titanate thin film"

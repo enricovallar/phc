@@ -1,0 +1,9 @@
+defaults:
+  - simulation: mpb
+  - geometry: triangular_lattice
+  - _self_
+
+# Global simulation parameters
+output_dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+save_plots: true
+verbose: true

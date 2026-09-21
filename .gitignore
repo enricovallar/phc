@@ -1,0 +1,39 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual Environments
+.venv/
+env/
+venv/
+
+# Conda
+conda-bld/
+
+# GDS & Photonic Layout Outputs
+*.gds
+*.oas
+*.csv
+*.dat
+
+# Ansys Lumerical Simulation Files & Logs
+*.fsp
+*.lms
+*.log
+*.p2k
+*.ldev
+
+# Hydra Outputs & Sweeps
+outputs/
+multirun/
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
