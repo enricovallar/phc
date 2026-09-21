@@ -7,12 +7,47 @@ import numpy as np
 
 def plot_band_structure(
     results: dict[str, Any],
-    node_labels: list[str],
-    node_indices: list[int],
+    node_labels: list[str] | None = None,
+    node_indices: list[int] | None = None,
     title: str = "Photonic Band Structure",
     save_path: str | Path | None = None,
+    *,
+    k_labels: list[str] | None = None,
+    k_indices: list[int] | None = None,
 ) -> plt.Figure:
-    """Plots the photonic band structure for computed polarizations."""
+    """Plots the photonic crystal band structure across the Brillouin zone k-path.
+
+    Visualizes computed eigenfrequencies for TE and TM polarizations as a function of the
+    unfolded 1D wavevector path. Highlights complete omnidirectional band gaps with gold
+    shading and percentage labels. If light line data is present in results, plots the light
+    line and shades the radiative light cone.
+
+    Args:
+        results: Dictionary returned by MPB solver runners (e.g. `run_band_solver`), containing:
+            - 'freqs': Mapping of polarization keys ('te', 'tm', 'te_like', 'tm_like') to
+              2D numpy arrays of shape `(num_k_points, num_bands)` containing normalized
+              dimensionless frequencies `omega * a / (2 * pi * c) = a / lambda`.
+            - 'light_line' (optional): 1D array of light line frequencies for 3D slab modes.
+        node_labels: List of string labels for high-symmetry k-points along the path
+            (e.g., `["Γ", "M", "K", "Γ"]`). Also accepts keyword argument `k_labels`.
+        node_indices: List of integer indices corresponding to the positions of the
+            high-symmetry points in the k-path (e.g., `[0, 16, 32, 48]`). Also accepts
+            keyword argument `k_indices`.
+        title: Plot title displayed at top of figure.
+        save_path: Optional file path (PNG, PDF, SVG) where figure will be saved.
+            Parent directories are created automatically if they do not exist.
+        k_labels: Alias for `node_labels`.
+        k_indices: Alias for `node_indices`.
+
+    Returns:
+        The matplotlib Figure object containing the rendered band diagram.
+
+    Raises:
+        ValueError: If results dictionary does not contain a valid 'freqs' map.
+    """
+    labels = k_labels if k_labels is not None else (node_labels or [])
+    indices = k_indices if k_indices is not None else (node_indices or [])
+
     fig, ax = plt.subplots(figsize=(7, 5), dpi=150)
 
     freqs_dict = results.get("freqs", {})
@@ -62,10 +97,10 @@ def plot_band_structure(
         )
 
     # High-symmetry labels & vertical grid lines
-    if node_indices and len(node_indices) == len(node_labels):
-        ax.set_xticks(node_indices)
-        ax.set_xticklabels(node_labels, fontsize=12)
-        for idx in node_indices:
+    if indices and len(indices) == len(labels):
+        ax.set_xticks(indices)
+        ax.set_xticklabels(labels, fontsize=12)
+        for idx in indices:
             ax.axvline(x=idx, color="gray", linestyle=":", lw=0.8)
 
     ax.set_xlim(0, x_max if x_max > 0 else 1)
@@ -95,7 +130,29 @@ def plot_epsilon(
     colorbar: bool = True,
     save_path: str | Path | None = None,
 ) -> plt.Figure:
-    """Plots the 2D dielectric function grid retrieved from MPB."""
+    """Plots the 2D dielectric permittivity distribution grid retrieved from MPB.
+
+    If a 3D permittivity array is passed, extracts and plots the 2D cross-section at the
+    mid-plane (z = N_z // 2).
+
+    Args:
+        epsilon: 2D or 3D numpy array containing dielectric permittivity values epsilon(r).
+        title: Title displayed at top of the figure.
+        cmap: Matplotlib colormap name (default: "viridis").
+        colorbar: If True, adds a labeled colorbar showing permittivity scale.
+        save_path: Optional file path (PNG, PDF, SVG) where figure will be saved.
+            Parent directories are created automatically if they do not exist.
+
+    Returns:
+        The matplotlib Figure object containing the rendered permittivity plot.
+
+    Raises:
+        ValueError: If the input epsilon array is not 2D or 3D.
+    """
+    if epsilon.ndim not in (2, 3):
+        raise ValueError(
+            f"Expected 2D or 3D epsilon array, got shape {epsilon.shape} (ndim={epsilon.ndim})."
+        )
     fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
 
     # If 3D, take mid-plane slice

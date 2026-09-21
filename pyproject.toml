@@ -27,6 +27,7 @@ pythonpath = [
     "packages/phc_layout/src",
     "packages/phc_materials/src",
     "packages/phc_mpb/src",
+    "packages/phc_utils/src",
 ]
 addopts = "--import-mode=importlib"
 markers = [

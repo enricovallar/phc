@@ -25,6 +25,7 @@ from phc_mpb import (
     plot_epsilon,
     run_band_solver,
 )
+from phc_utils import export_gds
 
 
 def run_hex_2d_pipeline(
@@ -75,17 +76,8 @@ def run_hex_2d_pipeline(
     unit_cell = phc_hexagonal_unit_cell(pitch=pitch, radius=radius)
     gds_source: Any = unit_cell
     if gds_file:
-        if gds_file.exists():
-            try:
-                gds_file.unlink()
-            except OSError:
-                pass
-        try:
-            unit_cell.write_gds(str(gds_file))
-            print(f"      -> Exported GDSII binary: {gds_file}")
-            gds_source = gds_file
-        except (OSError, RuntimeError) as e:
-            print(f"      -> GDS write notice ({e}); using in-memory component")
+        gds_source = export_gds(unit_cell, gds_file, overwrite=True)
+        print(f"      -> Exported GDSII binary: {gds_source}")
 
     # Step 2: Query Material Registry
     print("\n[2/6] Querying Material Registry...")

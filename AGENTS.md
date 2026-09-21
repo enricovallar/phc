@@ -88,10 +88,25 @@ Cross-module workflows demonstrate and test how packages interoperate (`phc_layo
 
 ---
 
-## 6. Coding Conventions
+## 6. Coding & Docstring Conventions
 
+### A. Mandatory Google-Style Docstrings
+All public modules, classes, functions, and methods must have comprehensive, structured Google-style docstrings. Never write single-line or vague docstrings for non-trivial APIs. Every docstring must include:
+1. **Summary**: Concise one-line imperative description of what the function/class does.
+2. **Extended Explanation** (if non-trivial): Details on algorithms, coordinate transformations, or physical assumptions.
+3. **`Args:`**: Every argument must be documented with:
+   - Name and expected type/structure.
+   - Physical meaning, coordinate convention, and units (e.g. micrometers $\mu\text{m}$, normalized frequency $\tilde{\omega}$).
+   - Default value behavior.
+4. **`Returns:`**: Explicit description of the return type and data structure, including dictionary keys, array dimensions/shapes, and units.
+5. **`Raises:`**: Specific exception classes (e.g., `ValueError`, `FileNotFoundError`, `RuntimeError`) and the exact conditions triggering them. Never catch or raise blind `Exception`.
+
+### B. Shared Interfuse Utilities (`phc_utils`)
+- Common cross-package operations (such as safe GDS file export, unit conversions $\tilde{\omega} \leftrightarrow \lambda_0$, path validation, and shared data serializers) must live in `packages/phc_utils`.
+- Never duplicate GDS file writing boilerplate (`if exists: unlink()`, try/except ladders) across simulation scripts; use `phc_utils.export_gds(component, filepath, overwrite=True)`.
+
+### C. Type Annotations & Units
 - **Type Annotations**: All public classes, methods, and functions must have complete type annotations (`typing.Any`, `typing.Literal`, `typing.Sequence`, etc.).
-- **Docstrings**: All public modules, classes, and functions must have descriptive docstrings explaining parameters, return values, and coordinate/unit conventions.
 - **Units**: 
   - Layout dimensions: micrometers ($\mu\text{m}$).
   - Frequencies in MPB: normalized dimensionless units ($\tilde{\omega} = \omega a / 2\pi c = a / \lambda$).
