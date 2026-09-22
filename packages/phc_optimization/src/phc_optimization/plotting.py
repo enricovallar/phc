@@ -336,3 +336,244 @@ def plot_bo_surrogate_map(
             export_loci_to_json(loci, p.parent / "optimal_loci.json")
 
     return fig
+
+
+def plot_locus_profile(
+    locus: dict[str, Any],
+    param_names: Sequence[str] | None = None,
+    param_bounds: dict[str, tuple[float, float]] | None = None,
+    output_path: Path | str | None = None,
+    title: str = "Degeneracy Locus Analysis",
+) -> plt.Figure:
+    """Plots a 3-panel figure analyzing the extracted optimal locus and group velocity.
+
+    - Panel (a): Parameter Space trajectory (p1 vs p2) color-coded by group velocity v_g / c.
+    - Panel (b): Group Velocity profile v_g / c vs normalized arc length t in [0, 1].
+    - Panel (c): Figure of Merit profile FOM vs normalized arc length t (log scale).
+
+    Args:
+        locus: Locus dictionary containing coordinate arrays and physical metrics.
+        param_names: Optional sequence of parameter names (e.g. ['r1', 'r2']).
+        param_bounds: Optional parameter bounds dict for axis limits.
+        output_path: Optional path to save the generated figure.
+        title: Overall plot title.
+
+    Returns:
+        Matplotlib Figure object containing the 3-panel locus profile.
+    """
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+    p1_name = (
+        param_names[0]
+        if param_names and len(param_names) >= 1
+        else locus.get("p1_name", "x1")
+    )
+    p2_name = (
+        param_names[1]
+        if param_names and len(param_names) >= 2
+        else locus.get("p2_name", "x2")
+    )
+
+    p1_label = f"${p1_name}/a$" if not p1_name.startswith("$") else p1_name
+    p2_label = f"${p2_name}/a$" if not p2_name.startswith("$") else p2_name
+
+    x1_vals = np.asarray(locus.get("x1", []), dtype=float)
+    x2_vals = np.asarray(locus.get("x2", []), dtype=float)
+    n_pts = len(x1_vals)
+    t_vals = np.linspace(0, 1, n_pts) if n_pts > 0 else np.array([])
+
+    vg_vals = np.asarray(locus.get("group_velocity", locus.get("vg", [])), dtype=float)
+    fom_vals = np.asarray(locus.get("fom", []), dtype=float)
+    has_vg = len(vg_vals) == n_pts and n_pts > 0 and np.any(vg_vals > 0)
+    has_fom = len(fom_vals) == n_pts and n_pts > 0
+
+    fig = plt.figure(figsize=(15.5, 4.6), dpi=150)
+    gs = gridspec.GridSpec(1, 3, wspace=0.35)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[0, 2])
+
+    # -------------------------------------------------------------
+    # Panel (a): Parameter Space Trajectory
+    # -------------------------------------------------------------
+    if n_pts > 0:
+        ax1.plot(
+            x1_vals,
+            x2_vals,
+            color="#888888",
+            linestyle="--",
+            linewidth=1.5,
+            zorder=3,
+        )
+        if has_vg:
+            sc = ax1.scatter(
+                x1_vals,
+                x2_vals,
+                c=vg_vals,
+                cmap="plasma",
+                s=45,
+                edgecolors="black",
+                linewidths=0.5,
+                zorder=4,
+            )
+            divider = make_axes_locatable(ax1)
+            cax = divider.append_axes("right", size="5%", pad=0.08)
+            cbar = fig.colorbar(sc, cax=cax)
+            cbar.set_label(r"$v_g / c$", fontsize=10, fontweight="bold")
+            cbar.ax.tick_params(labelsize=8.5)
+        else:
+            ax1.scatter(
+                x1_vals,
+                x2_vals,
+                color="#0070C0",
+                s=35,
+                edgecolors="black",
+                linewidths=0.5,
+                zorder=4,
+            )
+
+        # Mark Start (t=0) and End (t=1)
+        ax1.scatter(
+            x1_vals[0],
+            x2_vals[0],
+            c="#00FF00",
+            edgecolors="black",
+            marker="o",
+            s=90,
+            zorder=6,
+            label=r"Start ($t=0$)",
+        )
+        ax1.scatter(
+            x1_vals[-1],
+            x2_vals[-1],
+            c="#FF0000",
+            edgecolors="black",
+            marker="s",
+            s=90,
+            zorder=6,
+            label=r"End ($t=1$)",
+        )
+
+    ax1.set_xlabel(p1_label, fontsize=11, fontweight="bold")
+    ax1.set_ylabel(p2_label, fontsize=11, fontweight="bold")
+    ax1.set_title("(a) Parameter Space Trajectory", fontsize=11.5, fontweight="bold")
+    ax1.set_aspect("equal", adjustable="box")
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    ax1.xaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    ax1.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    if n_pts > 0:
+        ax1.legend(loc="best", frameon=True, framealpha=0.85, fontsize=8.5)
+
+    if param_bounds:
+        if p1_name in param_bounds:
+            b1 = param_bounds[p1_name]
+            ax1.set_xlim(float(b1[0]), float(b1[1]))
+        if p2_name in param_bounds:
+            b2 = param_bounds[p2_name]
+            ax1.set_ylim(float(b2[0]), float(b2[1]))
+
+    # -------------------------------------------------------------
+    # Panel (b): Group Velocity Profile
+    # -------------------------------------------------------------
+    if has_vg:
+        ax2.plot(
+            t_vals,
+            vg_vals,
+            "-o",
+            color="#0070C0",
+            linewidth=2.0,
+            markersize=4.5,
+            label=r"$v_g(t) / c$",
+        )
+        ax2.set_ylabel(r"Group Velocity $v_g / c$", fontsize=11, fontweight="bold")
+        ax2.set_xlabel(
+            r"Normalized Trajectory $t \in [0, 1]$", fontsize=11, fontweight="bold"
+        )
+        ax2.set_title(r"(b) Group Velocity $v_g / c$", fontsize=11.5, fontweight="bold")
+        ax2.grid(True, linestyle=":", alpha=0.6)
+        ax2.legend(loc="upper right", frameon=True, fontsize=9)
+    else:
+        ax2.text(
+            0.5,
+            0.5,
+            "Group Velocity\nNot Evaluated",
+            ha="center",
+            va="center",
+            transform=ax2.transAxes,
+            fontsize=11,
+            color="#666666",
+        )
+        ax2.set_title(r"(b) Group Velocity $v_g / c$", fontsize=11.5, fontweight="bold")
+        ax2.set_xlabel(r"Normalized Trajectory $t \in [0, 1]$", fontsize=11)
+
+    # -------------------------------------------------------------
+    # Panel (c): Figure of Merit / Residual Gap Profile
+    # -------------------------------------------------------------
+    if has_fom:
+        ax3.plot(
+            t_vals,
+            fom_vals,
+            "-s",
+            color="#00B050",
+            linewidth=1.8,
+            markersize=4.0,
+            label=r"$\mathrm{FOM}(t)$",
+        )
+        ax3.set_yscale("log")
+        ax3.set_ylabel(
+            r"$\mathrm{FOM} = \mathbb{E}[C]^{-1}$", fontsize=11, fontweight="bold"
+        )
+        ax3.set_xlabel(
+            r"Normalized Trajectory $t \in [0, 1]$", fontsize=11, fontweight="bold"
+        )
+        ax3.set_title(
+            r"(c) $\mathrm{FOM} = \mathbb{E}[C]^{-1}$",
+            fontsize=11.5,
+            fontweight="bold",
+        )
+        ax3.grid(True, linestyle=":", alpha=0.6)
+        ax3.legend(loc="upper right", frameon=True, fontsize=9)
+    else:
+        gaps = locus.get("residual_gap", locus.get("costs", []))
+        if gaps:
+            ax3.plot(
+                t_vals[: len(gaps)],
+                gaps,
+                "-s",
+                color="#E30613",
+                linewidth=1.8,
+                markersize=4.0,
+                label=r"Residual Gap",
+            )
+            ax3.set_yscale("log")
+            ax3.set_ylabel("Residual Gap", fontsize=11, fontweight="bold")
+            ax3.set_xlabel(
+                r"Normalized Trajectory $t \in [0, 1]$",
+                fontsize=11,
+                fontweight="bold",
+            )
+            ax3.set_title("Residual Gap Profile", fontsize=11.5, fontweight="bold")
+            ax3.grid(True, linestyle=":", alpha=0.6)
+            ax3.legend(loc="upper right", frameon=True, fontsize=9)
+        else:
+            ax3.text(
+                0.5,
+                0.5,
+                "FOM Profile\nNot Evaluated",
+                ha="center",
+                va="center",
+                transform=ax3.transAxes,
+                fontsize=11,
+                color="#666666",
+            )
+            ax3.set_title("Figure of Merit Profile", fontsize=11.5, fontweight="bold")
+
+    fig.suptitle(title, fontsize=13, fontweight="bold", y=0.98)
+
+    if output_path is not None:
+        p = Path(output_path).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(p, bbox_inches="tight")
+
+    return fig

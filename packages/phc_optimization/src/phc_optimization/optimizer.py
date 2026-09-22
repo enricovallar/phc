@@ -37,8 +37,20 @@ from skopt import Optimizer
 from skopt.space import Integer, Real
 
 from phc_optimization.connectivity import check_slab_connectivity
+from phc_optimization.locus import (
+    evaluate_locus_group_velocities,
+    export_loci_to_json,
+    export_locus_to_csv,
+    extract_optimal_loci,
+    refine_locus_points,
+)
 from phc_optimization.objectives import BaseObjective, get_objective
-from phc_optimization.plotting import plot_bo_convergence, plot_bo_surrogate_map
+from phc_optimization.plotting import (
+    plot_bo_convergence,
+    plot_bo_surrogate_map,
+    plot_locus_profile,
+)
+from phc_optimization.surrogate import fit_clean_surrogate
 from phc_optimization.types import OptimizationRecord, OptimizationResult, ParameterSpec
 
 
@@ -1147,3 +1159,250 @@ class BayesianOptimizer:
             "fig_eps": fig_eps,
             "fig_bands": fig_bands,
         }
+
+    def analyze_locus(
+        self,
+        max_loci: int = 1,
+        mode: Literal["auto", "cartesian", "polar"] = "auto",
+        refine: bool = True,
+        refine_tolerance: float = 1e-5,
+        max_refine_steps: int = 8,
+        exclude_unrefined: bool = True,
+        max_residual_gap: float = 1e-4,
+        delta_k: float = 0.001,
+        sample_points: int = 40,
+        plot_profile: bool = True,
+        save_artifacts: bool = True,
+        verbose: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Extracts, refines, and characterizes optimal 1D degeneracy manifolds.
+
+        Fits a penalty-filtered Gaussian Process surrogate to the evaluated optimization
+        landscape, extracts continuous 1D degeneracy loci, refines sampled coordinates
+        to exact degeneracy using fast Gamma-only 1D secant line searches, computes group
+        velocities at an adjacent k-point k = (delta_k, 0, 0), renders a 3-panel locus
+        profile figure, and saves tabular CSV / JSON manifests.
+
+        Args:
+            max_loci: Maximum number of distinct locus ridges to extract (defaults to 1).
+            mode: Extraction geometry mode: 'polar' (closed ring), 'cartesian' (open), or 'auto'.
+            refine: Whether to execute local secant refinement along curve normal vectors.
+            refine_tolerance: Cost threshold (e.g. 1e-5) defining exact degeneracy.
+            max_refine_steps: Maximum secant iterations per locus point.
+            exclude_unrefined: Whether to prune points that cannot reach max_residual_gap.
+            max_residual_gap: Maximum allowed residual cost for valid refined points.
+            delta_k: Offset from Gamma along k_x for Hellmann-Feynman group velocity evaluation.
+            sample_points: Number of points sampled along the smooth locus curve.
+            plot_profile: If True, renders and saves a 3-panel locus profile plot.
+            save_artifacts: If True, saves locus_points.csv and optimal_loci.json to disk.
+            verbose: Whether to print progress information to stdout.
+
+        Returns:
+            List of processed locus dictionaries containing refined coordinates,
+            residual gaps, and adjacent-point group velocities.
+
+        Raises:
+            RuntimeError: If called before any evaluations have been completed.
+            ValueError: If the optimization problem does not have exactly 2 search parameters.
+        """
+        if not self.records:
+            raise RuntimeError(
+                "No evaluations found. Call opt.run() before analyzing loci."
+            )
+        if len(self.param_names) != 2:
+            raise ValueError(
+                f"Locus manifold analysis requires exactly 2 search parameters, got {len(self.param_names)}: {self.param_names}"
+            )
+
+        # 1. Fit clean surrogate landscape
+        landscape = fit_clean_surrogate(
+            records=self.records,
+            param_specs=self.param_specs,
+            grid_resolution=80,
+        )
+
+        p1_n, p2_n = self.param_names[0], self.param_names[1]
+
+        # 2. Extract loci from surrogate FOM
+        loci = extract_optimal_loci(
+            grid_x1=landscape.x1_grid,
+            grid_x2=landscape.x2_grid,
+            fom_2d=landscape.predicted_fom,
+            threshold_percentile=85.0,
+            max_loci=max_loci,
+            sample_points=sample_points,
+            mode=mode,
+            p1_name=p1_n,
+            p2_name=p2_n,
+        )
+
+        if not loci:
+            if verbose:
+                print("No valid degeneracy loci found in surrogate landscape.")
+            return []
+
+        # Build reusable geometry lattice & material settings
+        default_mat = (
+            self.matrix_material if self.dimension == "2D" else self.background_material
+        )
+        pol = getattr(self.objective, "polarization", "te")
+
+        def _build_mode_solver_at_k(
+            pt_params: dict[str, float], k_pt: mp.Vector3
+        ) -> tuple[Any, dict[str, Any]]:
+            combined = {**self.fixed_params, **pt_params}
+            try:
+                sig = inspect.signature(self.cell_factory)
+                has_var_kw = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                )
+                cell_kwargs = (
+                    combined
+                    if has_var_kw
+                    else {k: v for k, v in combined.items() if k in sig.parameters}
+                )
+            except (ValueError, TypeError):
+                cell_kwargs = combined
+            comp = self.cell_factory(**cell_kwargs)
+            sz_val = float(combined.get("supercell_z", self.supercell_z))
+            lat = create_lattice(
+                lattice_type=self.lattice_type,
+                pitch=self.pitch,
+                dimension=self.dimension,
+                supercell_z=sz_val,
+            )
+            h_val = float(
+                combined.get(
+                    "slab_thickness",
+                    combined.get("thickness", combined.get("h", 0.5)),
+                )
+            )
+            geom = gds_to_mpb_geometry(
+                gds_source=comp,
+                pitch=self.pitch,
+                dimension=self.dimension,
+                slab_thickness=h_val,
+                slab_material=self.matrix_material,
+                etch_material=self.background_material,
+                geometry_lattice=lat,
+            )
+            ms = create_mode_solver(
+                geometry_lattice=lat,
+                geometry=geom,
+                k_points=[k_pt],
+                default_material=default_mat,
+                resolution=self.resolution,
+                num_bands=self.num_bands,
+            )
+            return ms, combined
+
+        def _evaluate_gamma_gap(
+            pt_params: dict[str, float],
+        ) -> tuple[float, float]:
+            with silence_c_stdout():
+                ms_gamma, combined = _build_mode_solver_at_k(
+                    pt_params, mp.Vector3(0, 0, 0)
+                )
+                solver_res = run_band_solver(
+                    ms=ms_gamma,
+                    polarization=pol,
+                    dimension=self.dimension,
+                    num_workers=1,
+                )
+                obj_eval = self.objective.evaluate(solver_res, combined)
+                f_high = obj_eval.metadata.get("freq_high", 0.0)
+                f_low = obj_eval.metadata.get("freq_low", 0.0)
+                signed_gap = float(f_high - f_low)
+                return signed_gap, float(obj_eval.cost)
+
+        def _evaluate_adjacent_vg(pt_params: dict[str, float]) -> float:
+            with silence_c_stdout():
+                k_adj = mp.Vector3(delta_k, 0, 0)
+                ms_vg, _ = _build_mode_solver_at_k(pt_params, k_adj)
+                solver_res = run_band_solver(
+                    ms=ms_vg,
+                    polarization=pol,
+                    dimension=self.dimension,
+                    compute_group_velocities=True,
+                    num_workers=1,
+                )
+                vg_dict = solver_res.get("group_velocities", {})
+                pol_k = pol.lower()
+                actual_k = pol_k
+                if actual_k not in vg_dict:
+                    for alias in ("te", "tm", "te_like", "tm_like", "all"):
+                        if alias in vg_dict:
+                            actual_k = alias
+                            break
+                if actual_k in vg_dict:
+                    vg_arr = vg_dict[actual_k]  # shape (1, num_bands, 3)
+                    t_bands = getattr(self.objective, "target_bands", None) or [
+                        max(1, self.num_bands // 2)
+                    ]
+                    vgs_list = [
+                        float(np.linalg.norm(vg_arr[0, b - 1]))
+                        for b in t_bands
+                        if b <= vg_arr.shape[1]
+                    ]
+                    if vgs_list:
+                        return float(max(vgs_list))
+                return 0.0
+
+        bounds_dict = {p.name: p.bounds for p in self.param_specs}
+
+        for locus in loci:
+            l_id = locus["locus_id"]
+            if verbose:
+                print(f"Processing Locus #{l_id} ({len(locus['x1'])} points)...")
+
+            if refine:
+                if verbose:
+                    print(
+                        f"  Refining Locus #{l_id} at Gamma (tol={refine_tolerance:.1e})..."
+                    )
+                refine_locus_points(
+                    locus=locus,
+                    param_names=self.param_names,
+                    evaluate_point_fn=_evaluate_gamma_gap,
+                    tolerance=refine_tolerance,
+                    max_steps=max_refine_steps,
+                    exclude_unrefined=exclude_unrefined,
+                    max_residual_gap=max_residual_gap,
+                    param_bounds=bounds_dict,
+                )
+
+            if verbose:
+                print(
+                    f"  Evaluating group velocity at adjacent point delta_k={delta_k}..."
+                )
+            evaluate_locus_group_velocities(
+                locus=locus,
+                param_names=self.param_names,
+                compute_vg_fn=_evaluate_adjacent_vg,
+            )
+
+            if save_artifacts:
+                locus_dir = self.output_dir / f"locus_{l_id:02d}"
+                locus_dir.mkdir(parents=True, exist_ok=True)
+                csv_path = locus_dir / "locus_points.csv"
+                export_locus_to_csv(locus, csv_path, param_names=self.param_names)
+                if verbose:
+                    print(f"  Saved locus points table to '{csv_path}'")
+
+                if plot_profile:
+                    fig_path = locus_dir / "locus_profile.png"
+                    plot_locus_profile(
+                        locus=locus,
+                        param_names=self.param_names,
+                        param_bounds=bounds_dict,
+                        output_path=fig_path,
+                        title=f"Degeneracy Locus #{l_id} ($v_g$ at $\\Delta k={delta_k}$)",
+                    )
+                    if verbose:
+                        print(f"  Saved 3-panel locus profile to '{fig_path}'")
+
+        if save_artifacts and loci:
+            export_loci_to_json(loci, self.output_dir / "optimal_loci.json")
+
+        return loci

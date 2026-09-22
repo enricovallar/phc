@@ -25,6 +25,9 @@ Command-Line Usage:
     # Disable real-time progress bar:
     python examples/demo_optimization_2d.py --no-progress
 
+    # Refine continuous degeneracy locus and compute adjacent group velocities:
+    python examples/demo_optimization_2d.py --analyze-locus
+
 CLI Options:
     --quick              Run in rapid smoke-test mode with minimal resolution and evaluations.
     --resolution RES     MPB computational mesh grid resolution per pitch unit a (default: 32, quick: 16).
@@ -33,6 +36,7 @@ CLI Options:
     --max-iterations N   Number of Bayesian optimization active learning generations (default: 4, quick: 1).
     --output-dir PATH    Custom output directory override (default: auto-resolved by phc_hydra).
     --no-progress        Disable the real-time tqdm progress bar.
+    --analyze-locus      Refine continuous degeneracy locus curve and compute adjacent group velocity.
 """
 
 import argparse
@@ -84,6 +88,7 @@ def run_optimization_2d_pipeline(
     max_iterations: int | None = None,
     output_dir: Path | str | None = None,
     show_progress: bool = True,
+    analyze_locus: bool = False,
 ) -> dict[str, Any]:
     """Runs the 2D Bayesian Optimization pipeline for accidental Dirac cone engineering.
 
@@ -96,6 +101,7 @@ def run_optimization_2d_pipeline(
         max_iterations: Number of active learning generations (override default).
         output_dir: Custom output directory or None to auto-resolve via phc_hydra.
         show_progress: Whether to display a real-time tqdm progress bar during search.
+        analyze_locus: If True, executes 1D secant locus refinement and adjacent-point group velocity evaluation.
 
     Returns:
         Dictionary containing best parameters, best FOM, residual cost, and output directory.
@@ -167,6 +173,10 @@ def run_optimization_2d_pipeline(
     if not quick:
         opt.run_best()
 
+    locus_results = []
+    if analyze_locus:
+        locus_results = opt.analyze_locus(delta_k=0.001)
+
     loci_file = result.output_dir / "optimal_loci.json"
     loci_data = []
     if loci_file.is_file():
@@ -181,6 +191,7 @@ def run_optimization_2d_pipeline(
         "best_cost": result.best_cost,
         "total_evaluations": len(result.records),
         "optimal_loci": loci_data,
+        "refined_loci": locus_results,
         "output_dir": str(result.output_dir),
     }
 
@@ -231,6 +242,11 @@ def main() -> None:
         action="store_true",
         help="Disable the real-time tqdm progress bar.",
     )
+    parser.add_argument(
+        "--analyze-locus",
+        action="store_true",
+        help="Refine continuous degeneracy locus curve and compute adjacent group velocity.",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -244,6 +260,7 @@ def main() -> None:
         max_iterations=args.max_iterations,
         output_dir=args.output_dir,
         show_progress=not args.no_progress,
+        analyze_locus=args.analyze_locus,
     )
     print("\n" + "=" * 70)
     print(" Optimization Complete! ")
@@ -254,6 +271,10 @@ def main() -> None:
     if res.get("optimal_loci"):
         print(
             f"  Degeneracy Loci: {len(res['optimal_loci'])} manifold curve(s) extracted (optimal_loci.json)"
+        )
+    if res.get("refined_loci"):
+        print(
+            f"  Refined Loci:    {len(res['refined_loci'])} refined locus manifold(s) analyzed with group velocity"
         )
     print(f"  Output Folder:   {res['output_dir']}")
     print("=" * 70)
