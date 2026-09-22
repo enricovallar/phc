@@ -9,6 +9,12 @@ dependencies = [
     "omegaconf>=2.3.0",
     "gdstk>=0.9.0",
     "matplotlib>=3.8.0",
+    "phc-utils",
+    "phc-hydra",
+    "phc-materials",
+    "phc-layout",
+    "phc-mpb",
+    "phc-optimization",
 ]
 
 
