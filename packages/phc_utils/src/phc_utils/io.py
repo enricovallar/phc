@@ -57,3 +57,36 @@ def export_gds(
         )
 
     return path
+
+
+import os
+import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+
+
+@contextmanager
+def silence_c_stdout() -> Generator[None, None, None]:
+    """Redirects low-level C file descriptor 1 (stdout) and 2 (stderr) to os.devnull.
+
+    Silences underlying compiled C/Fortran extension libraries (such as MPB and Meep)
+    that write directly to STDOUT_FILENO, allowing real-time Python terminal progress bars
+    (like tqdm) to render cleanly without line break disruptions.
+    """
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_stdout = os.dup(1)
+    saved_stderr = os.dup(2)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(devnull_fd, 1)
+        os.dup2(devnull_fd, 2)
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(saved_stdout, 1)
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stdout)
+        os.close(saved_stderr)
+        os.close(devnull_fd)

@@ -6,6 +6,7 @@ MPB electromagnetic eigensolving, and Gaussian Process surrogate active learning
 
 import json
 import time
+import warnings
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -14,6 +15,11 @@ from typing import Any, Literal
 import gdsfactory as gf
 import meep as mp
 import numpy as np
+
+# Suppress verbose C-level eigensolver chatter and repetitive sampling warnings
+mp.verbosity(0)
+warnings.filterwarnings("ignore", category=UserWarning, module="skopt")
+warnings.filterwarnings("ignore", message=".*balance properties of Sobol.*")
 from phc_hydra import SimulationOutputManager
 from phc_mpb import (
     create_lattice,
@@ -25,7 +31,7 @@ from phc_mpb import (
     plot_epsilon,
     run_band_solver,
 )
-from phc_utils import export_gds
+from phc_utils import export_gds, silence_c_stdout
 from skopt import Optimizer
 from skopt.space import Integer, Real
 
@@ -177,6 +183,10 @@ def _evaluate_candidate_worker(
         min_neck_width_px,
         objective,
     ) = args
+
+    # Suppress MPB C-level eigensolver stdout chatter
+    mp.verbosity(0)
+
     t_start = time.perf_counter()
     t_geom = 0.0
     t_solver = 0.0
@@ -189,87 +199,86 @@ def _evaluate_candidate_worker(
     component = cell_factory(**combined_params)
     t_geom = time.perf_counter() - t_geom_0
 
-    # 2. Setup MPB ModeSolver
-    mpb_lattice = create_lattice(
-        lattice_type=lattice_type,
-        pitch=pitch,
-        dimension=dimension,
-    )
-
-    h_val = float(
-        combined_params.get(
-            "slab_thickness",
-            combined_params.get("thickness", combined_params.get("h", 0.5)),
+    # 2. Setup and run MPB ModeSolver under C-level stdout suppression
+    with silence_c_stdout():
+        mpb_lattice = create_lattice(
+            lattice_type=lattice_type,
+            pitch=pitch,
+            dimension=dimension,
         )
-    )
-    mpb_geom = gds_to_mpb_geometry(
-        gds_source=component,
-        pitch=pitch,
-        dimension=dimension,
-        slab_thickness=h_val,
-        slab_material=matrix_material,
-        etch_material=background_material,
-        geometry_lattice=mpb_lattice,
-    )
 
-    default_mat = (
-        matrix_material if dimension == "2D" else background_material
-    )
-
-    ms = create_mode_solver(
-        geometry_lattice=mpb_lattice,
-        geometry=mpb_geom,
-        k_points=[mp.Vector3(0, 0, 0)],
-        default_material=default_mat,
-        resolution=resolution,
-        num_bands=num_bands,
-    )
-
-    # 3. Check dielectric connectivity (if enabled)
-    conn_status = "NOT_CHECKED"
-    if enforce_connectivity:
-        is_conn, _n_comp, msg = check_slab_connectivity(
-            ms_or_epsilon=ms,
-            epsilon_threshold=epsilon_threshold,
-            check_pbc=True,
-            min_neck_width_px=min_neck_width_px,
-        )
-        if not is_conn:
-            conn_status = f"FAILED ({msg})"
-            t_total = time.perf_counter() - t_start
-            return (
-                param_dict,
-                {"penalty": True},
-                f"FAILED: Disconnected dielectric ({msg})",
-                1.0,
-                1.0,
-                conn_status,
-                {"t_geom": t_geom, "t_solver": 0.0, "t_total": t_total},
+        h_val = float(
+            combined_params.get(
+                "slab_thickness",
+                combined_params.get("thickness", combined_params.get("h", 0.5)),
             )
-        conn_status = f"PASSED ({msg})"
+        )
+        mpb_geom = gds_to_mpb_geometry(
+            gds_source=component,
+            pitch=pitch,
+            dimension=dimension,
+            slab_thickness=h_val,
+            slab_material=matrix_material,
+            etch_material=background_material,
+            geometry_lattice=mpb_lattice,
+        )
 
-    # 4. Run MPB solver at Gamma
-    t_solv_0 = time.perf_counter()
-    pol = getattr(objective, "polarization", "te")
-    sym_group = getattr(objective, "symmetry_group", "C4v")
+        default_mat = matrix_material if dimension == "2D" else background_material
 
-    solver_res = run_band_solver(
-        ms=ms,
-        polarization=pol,
-        dimension=dimension,
-        compute_symmetries=True,
-        symmetry_group=sym_group,
-        compute_group_velocities=True,
-    )
-    t_solver = time.perf_counter() - t_solv_0
+        ms = create_mode_solver(
+            geometry_lattice=mpb_lattice,
+            geometry=mpb_geom,
+            k_points=[mp.Vector3(0, 0, 0)],
+            default_material=default_mat,
+            resolution=resolution,
+            num_bands=num_bands,
+        )
 
-    # 5. Evaluate target objective
-    obj_eval = objective.evaluate(
-        component=component,
-        ms=ms,
-        solver_results=solver_res,
-        params=combined_params,
-    )
+        # 3. Check dielectric connectivity (if enabled)
+        conn_status = "NOT_CHECKED"
+        if enforce_connectivity:
+            is_conn, _n_comp, msg = check_slab_connectivity(
+                ms_or_epsilon=ms,
+                epsilon_threshold=epsilon_threshold,
+                check_pbc=True,
+                min_neck_width_px=min_neck_width_px,
+            )
+            if not is_conn:
+                conn_status = f"FAILED ({msg})"
+                t_total = time.perf_counter() - t_start
+                return (
+                    param_dict,
+                    {"penalty": True},
+                    f"FAILED: Disconnected dielectric ({msg})",
+                    1.0,
+                    1.0,
+                    conn_status,
+                    {"t_geom": t_geom, "t_solver": 0.0, "t_total": t_total},
+                )
+            conn_status = f"PASSED ({msg})"
+
+        # 4. Run MPB solver at Gamma
+        t_solv_0 = time.perf_counter()
+        pol = getattr(objective, "polarization", "te")
+        sym_group = getattr(objective, "symmetry_group", "C4v")
+
+        solver_res = run_band_solver(
+            ms=ms,
+            polarization=pol,
+            dimension=dimension,
+            compute_symmetries=True,
+            symmetry_group=sym_group,
+            compute_group_velocities=True,
+        )
+        t_solver = time.perf_counter() - t_solv_0
+
+        # 5. Evaluate target objective
+        obj_eval = objective.evaluate(
+            component=component,
+            ms=ms,
+            solver_results=solver_res,
+            params=combined_params,
+        )
 
     t_total = time.perf_counter() - t_start
 
@@ -387,7 +396,9 @@ class BayesianOptimizer:
 
         self.max_iterations = int(max_iterations)
         self.batch_size = max(1, int(batch_size))
-        self.num_workers = int(num_workers) if num_workers is not None else self.batch_size
+        self.num_workers = (
+            int(num_workers) if num_workers is not None else self.batch_size
+        )
         self.initial_points = int(initial_points)
         self.initial_sampling = initial_sampling
         self.acq_func = acq_func
@@ -1068,7 +1079,9 @@ class BayesianOptimizer:
                 num_workers=num_workers,
             )
 
-            bands_path = self.output_dir / "best_band_structure.png" if save_plots else None
+            bands_path = (
+                self.output_dir / "best_band_structure.png" if save_plots else None
+            )
             param_str = ", ".join(f"{k}={v:.4f}" for k, v in params.items())
             fig_bands = plot_band_structure(
                 results=solver_res,

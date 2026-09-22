@@ -79,6 +79,10 @@ Cross-module workflows demonstrate and test how packages interoperate (`phc_layo
   ```
   - `quick=False`: High physical resolution, plots saved to disk, full analysis.
   - `quick=True`: Low resolution (e.g. `resolution=16`, `num_bands=4`, `k_density=2`), executes in $<2$ seconds.
+- **Mandatory CLI Entrypoints & Documentation**:
+  Every script in `examples/` must be directly executable from the command line:
+  1. **CLI Argument Parser**: Must implement a clean CLI parser using `argparse` in `main()` supporting flags for common overrides (e.g. `--quick`, `--resolution`, `--num-bands`, `--output-dir`, `--workers`, etc.) with informative help strings.
+  2. **Header Usage Documentation**: The module-level docstring at the top of the file must document **Command-Line Usage** and **CLI Options**, giving copy-pasteable terminal commands (e.g., standard execution, quick smoke test, custom resolution/iteration overrides) so users immediately know how to invoke the script from the shell.
 - **Automated Smoke Testing**:
   - All examples must have an automated test under `tests/integration/` (tagged with `@pytest.mark.integration`).
   - Integration tests execute each example with `quick=True` and assert that expected outputs/data structures are returned without errors.

@@ -215,3 +215,30 @@ def test_demo_optimization_2d_smoke(tmp_path: Path):
     assert (tmp_path / "bo_evaluations.log").is_file()
     assert (tmp_path / "bo_evaluations.jsonl").is_file()
     assert (tmp_path / "bo_evaluations.json").is_file()
+
+
+@pytest.mark.integration
+def test_demo_optimization_3d_smoke(tmp_path: Path):
+    """End-to-end smoke test verifying 3D PhC Slab Bayesian Optimization workflow."""
+    from examples.demo_optimization_3d import run_optimization_3d_pipeline
+
+    out = run_optimization_3d_pipeline(
+        quick=True,
+        output_dir=tmp_path,
+    )
+
+    assert "best_params" in out
+    assert "r1" in out["best_params"]
+    assert "r2" in out["best_params"]
+    assert "best_fom" in out
+    assert out["best_fom"] > 0.0
+    assert out["total_evaluations"] == 3
+
+    assert (tmp_path / "unit_cell.gds").is_file()
+    assert (tmp_path / "simulation_results.json").is_file()
+    assert (tmp_path / "bo_trajectory.csv").is_file()
+    assert (tmp_path / "bo_convergence.png").is_file()
+    assert (tmp_path / "bo_surrogate_map.png").is_file()
+    assert (tmp_path / "bo_evaluations.log").is_file()
+    assert (tmp_path / "bo_evaluations.jsonl").is_file()
+    assert (tmp_path / "bo_evaluations.json").is_file()
