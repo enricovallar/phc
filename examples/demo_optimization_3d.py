@@ -35,6 +35,7 @@ CLI Options:
     --quick              Run in rapid smoke-test mode with minimal resolution and evaluations.
     --resolution RES     In-plane (x, y) mesh resolution per unit pitch a (default: 20, quick: 12).
     --resolution-z RESZ  Vertical (z) mesh resolution per unit pitch a (default: 10, quick: 6).
+    --supercell-z HEIGHT Vertical supercell height in units of pitch a (default: 4.0).
     --num-bands N        Number of eigenbands to compute at Gamma (default: 8, quick: 4).
     --initial-points N   Number of quasi-random initial exploration points (default: 6, quick: 2).
     --max-iterations N   Number of Bayesian optimization active learning generations (default: 4, quick: 1).
@@ -91,6 +92,7 @@ def run_optimization_3d_pipeline(
     quick: bool = False,
     resolution: int | None = None,
     resolution_z: int | None = None,
+    supercell_z: float | None = None,
     num_bands: int | None = None,
     initial_points: int | None = None,
     max_iterations: int | None = None,
@@ -106,6 +108,7 @@ def run_optimization_3d_pipeline(
             suitable for automated integration testing in < 3 seconds.
         resolution: In-plane MPB computational mesh resolution per pitch unit a.
         resolution_z: Vertical MPB computational mesh resolution along z.
+        supercell_z: Vertical supercell height in units of lattice constant a (default: 4.0).
         num_bands: Number of eigenbands computed at Gamma.
         initial_points: Number of initial quasi-random exploration points.
         max_iterations: Number of active learning generations.
@@ -144,6 +147,7 @@ def run_optimization_3d_pipeline(
 
     r_xy = resolution if resolution is not None else default_res_xy
     r_z = resolution_z if resolution_z is not None else default_res_z
+    sz = supercell_z if supercell_z is not None else 4.0
     bands_val = num_bands if num_bands is not None else default_num_bands
     init_pts = initial_points if initial_points is not None else default_initial_points
     max_iters = max_iterations if max_iterations is not None else default_max_iterations
@@ -162,6 +166,7 @@ def run_optimization_3d_pipeline(
         fixed_parameters={
             "pitch": 1.0,
             "slab_thickness": 0.5,
+            "supercell_z": sz,
         },
         objective="dirac_degeneracy",
         objective_kwargs={
@@ -180,6 +185,7 @@ def run_optimization_3d_pipeline(
         lattice_type="square",
         pitch=1.0,
         dimension="3D_slab",
+        supercell_z=sz,
         resolution=grid_resolution,
         num_bands=bands_val,
         matrix_material="inp",
@@ -243,6 +249,12 @@ def main() -> None:
         help="Vertical MPB mesh resolution along z (default: 10, quick: 6).",
     )
     parser.add_argument(
+        "--supercell-z",
+        type=float,
+        default=None,
+        help="Vertical supercell height in units of pitch a (default: 4.0).",
+    )
+    parser.add_argument(
         "--num-bands",
         type=int,
         default=None,
@@ -292,6 +304,7 @@ def main() -> None:
         quick=args.quick,
         resolution=args.resolution,
         resolution_z=args.resolution_z,
+        supercell_z=args.supercell_z,
         num_bands=args.num_bands,
         initial_points=args.initial_points,
         max_iterations=args.max_iterations,

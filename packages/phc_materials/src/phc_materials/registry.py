@@ -61,7 +61,6 @@ DEFAULT_MATERIALS: dict[str, dict[str, Any]] = {
         "lumerical_name": "InP (Indium Phosphide) - Palik",
         "description": "Indium Phosphide at 1550 nm",
     },
-
 }
 
 

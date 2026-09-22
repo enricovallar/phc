@@ -8,7 +8,7 @@ resolution_z: 8     # Vertical mesh resolution (z) per unit pitch a
 k_density: 12
 polarization: te_like  # Options: 'te_like' (even), 'tm_like' (odd), or 'both'
 slab_thickness_um: 0.22
-supercell_z: 5.0
+supercell_z: 4.0
 cladding_index: 1.0
 num_workers: 4      # Concurrent workers for parallel k-point execution
 quick: false

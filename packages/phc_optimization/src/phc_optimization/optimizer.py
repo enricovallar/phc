@@ -4,6 +4,7 @@ Coordinates GDSFactory parametric layout generation, dielectric connectivity val
 MPB electromagnetic eigensolving, and Gaussian Process surrogate active learning.
 """
 
+import inspect
 import json
 import time
 import warnings
@@ -182,6 +183,7 @@ def _evaluate_candidate_worker(
         epsilon_threshold,
         min_neck_width_px,
         objective,
+        supercell_z,
     ) = args
 
     # Suppress MPB C-level eigensolver stdout chatter
@@ -194,17 +196,32 @@ def _evaluate_candidate_worker(
     param_dict = dict(zip(param_names, candidate_values, strict=False))
     combined_params = {**fixed_params, **param_dict}
 
-    # 1. Generate GDSFactory component
+    # 1. Generate GDSFactory component (filter kwargs to match cell_factory signature)
     t_geom_0 = time.perf_counter()
-    component = cell_factory(**combined_params)
+    try:
+        sig = inspect.signature(cell_factory)
+        has_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if has_var_kw:
+            cell_kwargs = combined_params
+        else:
+            cell_kwargs = {
+                k: v for k, v in combined_params.items() if k in sig.parameters
+            }
+    except (ValueError, TypeError):
+        cell_kwargs = combined_params
+    component = cell_factory(**cell_kwargs)
     t_geom = time.perf_counter() - t_geom_0
 
     # 2. Setup and run MPB ModeSolver under C-level stdout suppression
     with silence_c_stdout():
+        sz_val = float(combined_params.get("supercell_z", supercell_z))
         mpb_lattice = create_lattice(
             lattice_type=lattice_type,
             pitch=pitch,
             dimension=dimension,
+            supercell_z=sz_val,
         )
 
         h_val = float(
@@ -325,6 +342,7 @@ class BayesianOptimizer:
         lattice_type: Literal["square", "hexagonal"] = "square",
         pitch: float = 1.0,
         dimension: Literal["2D", "3D_slab"] = "2D",
+        supercell_z: float = 4.0,
         resolution: int | tuple[int, int, int] = 32,
         num_bands: int = 8,
         background_material: str = "air",
@@ -384,6 +402,7 @@ class BayesianOptimizer:
         self.lattice_type = lattice_type
         self.pitch = float(pitch)
         self.dimension = dimension
+        self.supercell_z = float(supercell_z)
         self.resolution = resolution
         self.num_bands = int(num_bands)
         self.background_material = background_material
@@ -790,6 +809,7 @@ class BayesianOptimizer:
                         self.epsilon_threshold,
                         self.min_neck_width_px,
                         self.objective,
+                        self.supercell_z,
                     )
                     for x_cand in candidates
                 ]
@@ -864,7 +884,21 @@ class BayesianOptimizer:
             best_rec = min(self.records, key=lambda r: r.cost)
 
         # Export mandatory GDS layout for optimal design
-        best_component = self.cell_factory(**{**self.fixed_params, **best_rec.params})
+        best_combined = {**self.fixed_params, **best_rec.params}
+        try:
+            sig = inspect.signature(self.cell_factory)
+            has_var_kw = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+            if has_var_kw:
+                cell_kwargs = best_combined
+            else:
+                cell_kwargs = {
+                    k: v for k, v in best_combined.items() if k in sig.parameters
+                }
+        except (ValueError, TypeError):
+            cell_kwargs = best_combined
+        best_component = self.cell_factory(**cell_kwargs)
         optimal_gds = self.output_dir / "unit_cell.gds"
         export_gds(best_component, optimal_gds, overwrite=True)
 
@@ -1007,11 +1041,24 @@ class BayesianOptimizer:
             params = {**self.fixed_params, **best_params}
 
         # 2. Build GDS layout and MPB geometry
-        component = self.cell_factory(**params)
+        try:
+            sig = inspect.signature(self.cell_factory)
+            has_var_kw = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+            if has_var_kw:
+                cell_kwargs = params
+            else:
+                cell_kwargs = {k: v for k, v in params.items() if k in sig.parameters}
+        except (ValueError, TypeError):
+            cell_kwargs = params
+        component = self.cell_factory(**cell_kwargs)
+        sz_val = float(params.get("supercell_z", self.supercell_z))
         mpb_lattice = create_lattice(
             lattice_type=self.lattice_type,
             pitch=self.pitch,
             dimension=self.dimension,
+            supercell_z=sz_val,
         )
         h_val = float(
             params.get(

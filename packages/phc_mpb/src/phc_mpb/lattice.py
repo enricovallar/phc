@@ -11,7 +11,7 @@ def lattice_to_mpb_lattice(
     lattice: Lattice,
     dimension: Literal["2D", "3D_slab"] = "2D",
     supercell: tuple[int, int] = (1, 1),
-    supercell_z: float = 5.0,
+    supercell_z: float = 4.0,
     normalize: bool = True,
 ) -> mp.Lattice:
     """Converts a phc_layout.lattice.Lattice object into an mp.Lattice for MPB.
@@ -82,7 +82,7 @@ def create_lattice(
     pitch: float = 1.0,
     dimension: Literal["2D", "3D_slab"] = "2D",
     supercell: tuple[int, int] = (1, 1),
-    supercell_z: float = 5.0,
+    supercell_z: float = 4.0,
 ) -> mp.Lattice:
     """Builds an mp.Lattice object for MPB simulations.
 
