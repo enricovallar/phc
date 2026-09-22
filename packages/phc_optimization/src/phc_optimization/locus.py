@@ -699,6 +699,10 @@ def refine_locus_points(
         costs_ref.append(float(best_cost))
         is_valid_list.append(bool(best_cost <= max_residual_gap))
 
+    if "fom" in locus:
+        locus["fom_surrogate"] = list(locus["fom"])
+    foms_ref = [float(1.0 / max(c, 1e-12)) for c in costs_ref]
+
     if exclude_unrefined:
         valid_indices = [i for i, v in enumerate(is_valid_list) if v]
         num_pruned = n_pts - len(valid_indices)
@@ -718,8 +722,7 @@ def refine_locus_points(
             locus["costs"] = [costs_ref[i] for i in valid_indices]
             locus["gaps"] = [gaps_ref[i] for i in valid_indices]
             locus["is_valid"] = [is_valid_list[i] for i in valid_indices]
-            if "fom" in locus and len(locus["fom"]) == n_pts:
-                locus["fom"] = [locus["fom"][i] for i in valid_indices]
+            locus["fom"] = [foms_ref[i] for i in valid_indices]
         else:
             locus["x1"] = r1_ref
             locus["x2"] = r2_ref
@@ -727,6 +730,7 @@ def refine_locus_points(
             locus["costs"] = costs_ref
             locus["gaps"] = gaps_ref
             locus["is_valid"] = is_valid_list
+            locus["fom"] = foms_ref
     else:
         locus["x1"] = r1_ref
         locus["x2"] = r2_ref
@@ -734,6 +738,7 @@ def refine_locus_points(
         locus["costs"] = costs_ref
         locus["gaps"] = gaps_ref
         locus["is_valid"] = is_valid_list
+        locus["fom"] = foms_ref
 
     return locus
 
@@ -807,34 +812,45 @@ def export_locus_to_csv(
     vgs = locus.get("group_velocity", locus.get("vg", [0.0] * n))
     is_valid = locus.get("is_valid", [True] * n)
 
+    x1_unref = locus.get("x1_unrefined", [])
+    x2_unref = locus.get("x2_unrefined", [])
+    has_unref = len(x1_unref) == n and len(x2_unref) == n
+
     with open(p, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(
-            [
-                "point_idx",
-                "t_normalized",
-                p1_n,
-                p2_n,
-                "residual_gap",
-                "fom",
-                "group_velocity",
-                "is_valid",
-            ]
-        )
+        headers = [
+            "point_idx",
+            "t_normalized",
+            *([f"{p1_n}_initial", f"{p2_n}_initial"] if has_unref else []),
+            p1_n,
+            p2_n,
+            "residual_gap",
+            "fom",
+            "group_velocity",
+            "is_valid",
+        ]
+        writer.writerow(headers)
         for i in range(n):
             t_norm = float(i) / max(n - 1, 1)
-            writer.writerow(
-                [
-                    i + 1,
-                    round(t_norm, 5),
-                    round(float(x1_pts[i]), 6),
-                    round(float(x2_pts[i]), 6),
-                    round(float(gaps[i]), 8) if i < len(gaps) else 0.0,
-                    round(float(foms[i]), 4) if i < len(foms) else 0.0,
-                    round(float(vgs[i]), 6) if i < len(vgs) else 0.0,
-                    bool(is_valid[i]) if i < len(is_valid) else True,
-                ]
-            )
+            row = [
+                i + 1,
+                round(t_norm, 5),
+                *(
+                    [
+                        round(float(x1_unref[i]), 6),
+                        round(float(x2_unref[i]), 6),
+                    ]
+                    if has_unref
+                    else []
+                ),
+                round(float(x1_pts[i]), 6),
+                round(float(x2_pts[i]), 6),
+                round(float(gaps[i]), 8) if i < len(gaps) else 0.0,
+                round(float(foms[i]), 4) if i < len(foms) else 0.0,
+                round(float(vgs[i]), 6) if i < len(vgs) else 0.0,
+                bool(is_valid[i]) if i < len(is_valid) else True,
+            ]
+            writer.writerow(row)
     return p
 
 

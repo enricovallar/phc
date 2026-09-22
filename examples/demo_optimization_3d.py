@@ -215,7 +215,7 @@ def run_optimization_3d_pipeline(
 
     locus_results = []
     if analyze_locus:
-        locus_results = opt.analyze_locus(delta_k=0.001)
+        locus_results = opt.analyze_locus(delta_k=0.01)
 
     loci_file = result.output_dir / "optimal_loci.json"
     loci_data = []

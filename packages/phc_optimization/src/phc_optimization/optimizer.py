@@ -1170,7 +1170,7 @@ class BayesianOptimizer:
         max_refine_steps: int = 8,
         exclude_unrefined: bool = True,
         max_residual_gap: float = 1e-4,
-        delta_k: float = 0.001,
+        delta_k: float = 0.01,
         sample_points: int = 40,
         plot_profile: bool = True,
         save_artifacts: bool = True,
@@ -1192,7 +1192,7 @@ class BayesianOptimizer:
             max_refine_steps: Maximum secant iterations per locus point.
             exclude_unrefined: Whether to prune points that cannot reach max_residual_gap.
             max_residual_gap: Maximum allowed residual cost for valid refined points.
-            delta_k: Offset from Gamma along k_x for Hellmann-Feynman group velocity evaluation.
+            delta_k: Offset from Gamma along k_x for Hellmann-Feynman group velocity evaluation (default: 0.01).
             sample_points: Number of points sampled along the smooth locus curve.
             plot_profile: If True, renders and saves a 3-panel locus profile plot.
             save_artifacts: If True, saves locus_points.csv and optimal_loci.json to disk.
@@ -1259,23 +1259,14 @@ class BayesianOptimizer:
 
         def _build_mode_solver_at_k(
             pt_params: dict[str, float], k_pt: mp.Vector3
-        ) -> tuple[Any, dict[str, Any]]:
+        ) -> tuple[Any, dict[str, Any], gf.Component]:
             combined = {**self.fixed_params, **pt_params}
-            try:
-                sig = inspect.signature(self.cell_factory)
-                has_var_kw = any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD
-                    for p in sig.parameters.values()
-                )
-                cell_kwargs = (
-                    combined
-                    if has_var_kw
-                    else {k: v for k, v in combined.items() if k in sig.parameters}
-                )
-            except (ValueError, TypeError):
-                cell_kwargs = combined
-            comp = self.cell_factory(**cell_kwargs)
-            sz_val = float(combined.get("supercell_z", self.supercell_z))
+            comp = self.cell_factory(**combined)
+            sz_val = float(
+                self.supercell_z
+                if self.supercell_z is not None
+                else combined.get("supercell_z", 4.0)
+            )
             lat = create_lattice(
                 lattice_type=self.lattice_type,
                 pitch=self.pitch,
@@ -1314,11 +1305,17 @@ class BayesianOptimizer:
                 ms_gamma, combined, comp = _build_mode_solver_at_k(
                     pt_params, mp.Vector3(0, 0, 0)
                 )
+                compute_syms = not getattr(
+                    self.objective, "bypass_irrep_identification", True
+                )
+                sym_group = getattr(self.objective, "symmetry_group", "C4v")
                 solver_res = run_band_solver(
                     ms=ms_gamma,
                     polarization=pol,
                     dimension=self.dimension,
                     num_workers=1,
+                    compute_symmetries=compute_syms,
+                    symmetry_group=sym_group,
                     verbose=False,
                 )
                 obj_eval = self.objective.evaluate(
@@ -1327,10 +1324,17 @@ class BayesianOptimizer:
                     solver_results=solver_res,
                     params=combined,
                 )
-                f_high = obj_eval.metadata.get("freq_high", 0.0)
-                f_low = obj_eval.metadata.get("freq_low", 0.0)
-                signed_gap = float(f_high - f_low)
-                return signed_gap, float(obj_eval.cost)
+                signed_gap = float(
+                    obj_eval.metadata.get(
+                        "signed_gap",
+                        obj_eval.metadata.get("freq_high", 0.0)
+                        - obj_eval.metadata.get("freq_low", 0.0),
+                    )
+                )
+                gap_cost = float(
+                    obj_eval.metadata.get("raw_cost", obj_eval.cost)
+                )
+                return signed_gap, gap_cost
 
         def _evaluate_adjacent_vg(pt_params: dict[str, float]) -> float:
             with silence_c_stdout():
@@ -1354,9 +1358,11 @@ class BayesianOptimizer:
                             break
                 if actual_k in vg_dict:
                     vg_arr = vg_dict[actual_k]  # shape (1, num_bands, 3)
-                    t_bands = getattr(self.objective, "target_bands", None) or [
-                        max(1, self.num_bands // 2)
-                    ]
+                    t_bands = (
+                        getattr(self.objective, "target_bands", None)
+                        or getattr(self.objective, "mode_indices", None)
+                        or [max(1, self.num_bands // 2)]
+                    )
                     vgs_list = [
                         float(np.linalg.norm(vg_arr[0, b - 1]))
                         for b in t_bands

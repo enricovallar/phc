@@ -398,6 +398,20 @@ def plot_locus_profile(
     # Panel (a): Parameter Space Trajectory
     # -------------------------------------------------------------
     if n_pts > 0:
+        if "x1_unrefined" in locus and "x2_unrefined" in locus:
+            u_x1 = locus["x1_unrefined"]
+            u_x2 = locus["x2_unrefined"]
+            if len(u_x1) > 0:
+                ax1.plot(
+                    u_x1,
+                    u_x2,
+                    color="#B0B0B0",
+                    linestyle=":",
+                    linewidth=1.8,
+                    zorder=2,
+                    label="Surrogate Initial",
+                )
+
         ax1.plot(
             x1_vals,
             x2_vals,

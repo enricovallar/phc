@@ -135,15 +135,22 @@ class DiracDegeneracyObjective(BaseObjective):
                 degeneracy_tol=self.degeneracy_tol,
             )
             if error_msg or not dynamic_bands:
-                return ObjectiveEvaluation(
-                    cost=1.0,
-                    fom=1.0,
-                    status=f"FAILED: {error_msg}",
-                    metadata={"full_map": full_map, "corrections": corrections},
-                    is_penalty=True,
-                )
-            target_bands = dynamic_bands
-            tracking_label = f"Mapped to bands {target_bands}"
+                if self.mode_indices:
+                    target_bands = self.mode_indices
+                    tracking_label = (
+                        f"Failsafe mode indices {target_bands} ({error_msg})"
+                    )
+                else:
+                    return ObjectiveEvaluation(
+                        cost=1.0,
+                        fom=1.0,
+                        status=f"FAILED: {error_msg}",
+                        metadata={"full_map": full_map, "corrections": corrections},
+                        is_penalty=True,
+                    )
+            else:
+                target_bands = dynamic_bands
+                tracking_label = f"Mapped to bands {target_bands}"
         else:
             target_bands = self.mode_indices
             tracking_label = f"Static mode indices {target_bands}"
@@ -158,13 +165,20 @@ class DiracDegeneracyObjective(BaseObjective):
         freq_high = band_freqs.get(idx_high, 0.0)
         freq_low = band_freqs.get(idx_low, 0.0)
 
-        freq_middle = (freq_high + freq_low) / 2.0
+        sorted_target = sorted(target_bands)
+        if len(sorted_target) >= 3:
+            f_l = band_freqs.get(sorted_target[0], 0.0)
+            f_m = band_freqs.get(sorted_target[1], 0.0)
+            f_h = band_freqs.get(sorted_target[-1], 0.0)
+            # Signed gap: singlet above doublet (+) or singlet below doublet (-)
+            signed_gap = (f_h - f_m) - (f_m - f_l)
+            freq_middle = f_m if f_m > 0 else (freq_high + freq_low) / 2.0
+        else:
+            signed_gap = freq_high - freq_low
+            freq_middle = (freq_high + freq_low) / 2.0
+
         if freq_middle <= 0:
-            sorted_target = sorted(target_bands)
-            idx_central = (
-                sorted_target[1] if len(sorted_target) >= 3 else sorted_target[0]
-            )
-            freq_middle = band_freqs.get(idx_central, 1.0)
+            freq_middle = 1.0
 
         raw_cost = abs(freq_high - freq_low)
         normalized_cost = raw_cost / freq_middle if freq_middle > 0 else raw_cost
@@ -203,6 +217,7 @@ class DiracDegeneracyObjective(BaseObjective):
             "freq_middle": freq_middle,
             "freq_high": freq_high,
             "freq_low": freq_low,
+            "signed_gap": signed_gap,
             "corrections": corrections,
             "full_map": full_map,
         }
