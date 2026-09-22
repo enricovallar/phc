@@ -3,6 +3,7 @@ from typing import Any, Literal
 
 import numpy as np
 from phc_materials import to_mpb_medium
+from phc_utils import silence_c_stdout
 
 from phc_mpb.parallel import run_parallel_band_solver
 
@@ -85,6 +86,7 @@ def run_band_solver(
     compute_group_velocities: bool = False,
     compute_symmetries: bool = False,
     symmetry_group: str = "C4v",
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Executes the MPB ModeSolver with the specified polarization mode and optional parallelism.
 
@@ -101,6 +103,8 @@ def run_band_solver(
         compute_group_velocities: Whether to compute group velocity vectors at each k-point.
         compute_symmetries: Whether to analyze point-group symmetries and irreps at Gamma (k=0).
         symmetry_group: Point group name ('C4v' or 'C6v') when compute_symmetries is True.
+        verbose: If True, streams MPB C-level iteration and band output to stdout.
+            If False (default), silences solver chatter for clean execution.
 
     Returns:
         Dict containing freqs (dict of arrays), gaps, light_line, polarization, dimension,
@@ -115,6 +119,7 @@ def run_band_solver(
             num_workers=num_workers,
             resolution_z=resolution_z,
             compute_polarization_fractions=compute_fractions,
+            verbose=verbose,
         )
     if not hasattr(ms, "run_te"):
         raise TypeError(f"Expected an mpb.ModeSolver instance, got {type(ms).__name__}")
@@ -170,7 +175,11 @@ def run_band_solver(
 
             callbacks.append(_sym_callback)
 
-        run_fn(*callbacks)
+        if not verbose:
+            with silence_c_stdout():
+                run_fn(*callbacks)
+        else:
+            run_fn(*callbacks)
 
         results["freqs"][pol_key] = np.copy(ms.all_freqs)
         results["gaps"][pol_key] = [ms.retrieve_gap(b) for b in range(1, ms.num_bands)]

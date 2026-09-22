@@ -42,7 +42,9 @@ The extraction of a single continuous 1D locus from a 2D surrogate grid was hand
 When `mode: "cartesian"` (or default manifold mode):
 1. **Percentile Cutoff & Binary Morphological Closing**:
    ```python
-   cutoff = float(np.percentile(finite_fom, threshold_percentile)) # e.g. 85th or 90th percentile
+   cutoff = float(
+       np.percentile(finite_fom, threshold_percentile)
+   )  # e.g. 85th or 90th percentile
    mask = (fom_2d >= cutoff) & np.isfinite(fom_2d)
    mask = ndi.binary_closing(mask)
    ```
@@ -58,7 +60,9 @@ When `mode: "cartesian"` (or default manifold mode):
 3. **Truncation by `max_loci: 1`**:
    The list of components is explicitly sliced to retain only the top component:
    ```python
-   selected_components = components[:max_loci] # When max_loci == 1, exactly 1 component is selected
+   selected_components = components[
+       :max_loci
+   ]  # When max_loci == 1, exactly 1 component is selected
    ```
 4. **Zhang-Suen Topological Thinning**:
    The selected component mask is reduced to a 1-pixel-wide central skeleton using the Zhang-Suen morphological thinning algorithm (`zhang_suen_thinning`), preserving 8-connectivity and endpoints.
@@ -180,7 +184,7 @@ vg_params["display_symmetry?"] = "false"
 vg_params["display_group_velocity?"] = "true"
 vg_params["only_gamma?"] = "false"
 vg_params["delta_k_mode?"] = "true"
-vg_params["delta_k"] = delta_k # e.g. 0.001
+vg_params["delta_k"] = delta_k  # e.g. 0.001
 
 run_hpc(
     script=self._get_script_path(),
@@ -197,8 +201,11 @@ The output log is parsed via `phc_nzi.extractor.extract_group_velocities`:
 ```python
 vg_data = extract_group_velocities(output_path=vg_log, save_data=True)
 # Target group velocity extracted along x-direction for target multiplet bands:
-target_vgs = [float(rec["vx"]) for rec in vg_data["flat_records"] 
-              if rec["band"] in target_bands and rec["parity"] == polarization]
+target_vgs = [
+    float(rec["vx"])
+    for rec in vg_data["flat_records"]
+    if rec["band"] in target_bands and rec["parity"] == polarization
+]
 vg_val = float(max(target_vgs))
 ```
 
@@ -229,9 +236,14 @@ Once all refined points along a locus are simulated, [`plot_locus_profiles`](fil
    - Points are plotted as a scatter plot **color-coded by group velocity $v_g / c$** using the `plasma` colormap:
      ```python
      sc = ax_param.scatter(
-         r1_vals, r2_vals,
-         c=vg_vals, cmap="plasma", s=40,
-         edgecolors="black", linewidths=0.5, zorder=4
+         r1_vals,
+         r2_vals,
+         c=vg_vals,
+         cmap="plasma",
+         s=40,
+         edgecolors="black",
+         linewidths=0.5,
+         zorder=4,
      )
      cbar = fig.colorbar(sc, cax=cax)
      cbar.set_label(r"$v_g / c$", fontsize=10, fontweight="bold")

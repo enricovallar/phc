@@ -7,7 +7,6 @@ Supports anisotropic mesh resolution (rx, ry, rz) and 3D slab parity modes (zeve
 
 import concurrent.futures
 import contextlib
-import io
 import os
 from collections.abc import Sequence
 from typing import Any, Literal
@@ -97,12 +96,9 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
     band_funcs = [_metrics_callback] if should_compute_fracs else []
 
     # Suppress worker stdout unless verbose is explicitly requested
-    stdout_target = None if verbose else io.StringIO()
-    ctx = (
-        contextlib.redirect_stdout(stdout_target)
-        if stdout_target is not None
-        else contextlib.nullcontext()
-    )
+    from phc_utils import silence_c_stdout
+
+    ctx = contextlib.nullcontext() if verbose else silence_c_stdout()
 
     with ctx:
         if dimension == "2D":

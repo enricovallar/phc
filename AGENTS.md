@@ -38,6 +38,10 @@ The workspace follows a strict monorepo architecture with distinct packages loca
   - Both **TE** and **TM** (or TE-like / TM-like) polarizations.
   - Arbitrary unit cell definitions.
 
+### D. Suppressed / Reduced MPB Solver Verbosity by Default
+- **Always suppress MPB and Meep solver output verbosity by default** across all workflows, benchmarks, examples, and optimization routines.
+- Meep and MPB C/C++ engines print voluminous per-iteration trace lines and band outputs directly to C-level `stdout`. Workflows must suppress this solver chatter by default using `mp.verbosity(0)` and `phc_utils.silence_c_stdout()` (or `verbose: bool = False`), ensuring clean terminal output and progress reporting unless explicit debugging verbosity is requested.
+
 ---
 
 ## 3. Hydra Configuration & Standard Simulation Output File Tree

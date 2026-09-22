@@ -50,7 +50,7 @@ from phc_optimization.plotting import (
     plot_bo_surrogate_map,
     plot_locus_profile,
 )
-from phc_optimization.surrogate import fit_clean_surrogate
+from phc_optimization.surrogate import predict_surrogate_landscape
 from phc_optimization.types import OptimizationRecord, OptimizationResult, ParameterSpec
 
 
@@ -1131,12 +1131,13 @@ class BayesianOptimizer:
         solver_res: dict[str, Any] = {}
         if plot_bands:
             pol = getattr(self.objective, "polarization", "te")
-            solver_res = run_band_solver(
-                ms=ms,
-                polarization=pol,
-                dimension=self.dimension,
-                num_workers=num_workers,
-            )
+            with silence_c_stdout():
+                solver_res = run_band_solver(
+                    ms=ms,
+                    polarization=pol,
+                    dimension=self.dimension,
+                    num_workers=num_workers,
+                )
 
             bands_path = (
                 self.output_dir / "best_band_structure.png" if save_plots else None
@@ -1215,13 +1216,22 @@ class BayesianOptimizer:
             )
 
         # 1. Fit clean surrogate landscape
-        landscape = fit_clean_surrogate(
-            records=self.records,
-            param_specs=self.param_specs,
-            grid_resolution=80,
-        )
-
         p1_n, p2_n = self.param_names[0], self.param_names[1]
+        bounds = [p.bounds for p in self.param_specs]
+        active_model = (
+            self.optimizer.models[-1]
+            if hasattr(self.optimizer, "models") and self.optimizer.models
+            else None
+        )
+        landscape = predict_surrogate_landscape(
+            records=self.records,
+            param_names=[p1_n, p2_n],
+            bounds=(bounds[0], bounds[1]),
+            optimizer_model=active_model,
+            grid_points=80,
+            clean_refit=True,
+            random_state=self.random_state,
+        )
 
         # 2. Extract loci from surrogate FOM
         loci = extract_optimal_loci(
@@ -1295,13 +1305,13 @@ class BayesianOptimizer:
                 resolution=self.resolution,
                 num_bands=self.num_bands,
             )
-            return ms, combined
+            return ms, combined, comp
 
         def _evaluate_gamma_gap(
             pt_params: dict[str, float],
         ) -> tuple[float, float]:
             with silence_c_stdout():
-                ms_gamma, combined = _build_mode_solver_at_k(
+                ms_gamma, combined, comp = _build_mode_solver_at_k(
                     pt_params, mp.Vector3(0, 0, 0)
                 )
                 solver_res = run_band_solver(
@@ -1309,8 +1319,14 @@ class BayesianOptimizer:
                     polarization=pol,
                     dimension=self.dimension,
                     num_workers=1,
+                    verbose=False,
                 )
-                obj_eval = self.objective.evaluate(solver_res, combined)
+                obj_eval = self.objective.evaluate(
+                    component=comp,
+                    ms=ms_gamma,
+                    solver_results=solver_res,
+                    params=combined,
+                )
                 f_high = obj_eval.metadata.get("freq_high", 0.0)
                 f_low = obj_eval.metadata.get("freq_low", 0.0)
                 signed_gap = float(f_high - f_low)
@@ -1319,13 +1335,14 @@ class BayesianOptimizer:
         def _evaluate_adjacent_vg(pt_params: dict[str, float]) -> float:
             with silence_c_stdout():
                 k_adj = mp.Vector3(delta_k, 0, 0)
-                ms_vg, _ = _build_mode_solver_at_k(pt_params, k_adj)
+                ms_vg, _, _ = _build_mode_solver_at_k(pt_params, k_adj)
                 solver_res = run_band_solver(
                     ms=ms_vg,
                     polarization=pol,
                     dimension=self.dimension,
                     compute_group_velocities=True,
                     num_workers=1,
+                    verbose=False,
                 )
                 vg_dict = solver_res.get("group_velocities", {})
                 pol_k = pol.lower()

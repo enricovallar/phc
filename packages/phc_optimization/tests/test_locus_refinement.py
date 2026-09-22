@@ -215,3 +215,45 @@ def test_plot_locus_profile_and_export_csv(tmp_path: Path):
     assert "group_velocity" in csv_content
     assert "r1" in csv_content
     assert "r2" in csv_content
+
+
+def test_bayesian_optimizer_analyze_locus_runs(tmp_path: Path):
+    """Verifies that BayesianOptimizer.analyze_locus runs cleanly without parameter mismatch."""
+    import gdsfactory as gf
+    from phc_layout.components.unit_cell import phc_wyckoff_unit_cell
+    from phc_optimization import BayesianOptimizer
+
+    def mock_cell(
+        r1: float = 0.25, r2: float = 0.20, pitch: float = 1.0
+    ) -> gf.Component:
+        return phc_wyckoff_unit_cell(
+            pitch=pitch,
+            point_group="C4v",
+            features=[("1a", r1), ("1b", r2)],
+        )
+
+    opt = BayesianOptimizer(
+        cell_factory=mock_cell,
+        parameters={"r1": (0.22, 0.32), "r2": (0.20, 0.30)},
+        fixed_parameters={"pitch": 1.0},
+        objective="dirac_degeneracy",
+        objective_kwargs={
+            "symmetry_group": "C4v",
+            "polarization": "te",
+            "bypass_irrep_identification": True,
+            "mode_indices": [3, 4, 5],
+        },
+        batch_size=1,
+        num_workers=1,
+        resolution=12,
+        num_bands=6,
+        initial_points=2,
+        max_iterations=1,
+        output_dir=tmp_path,
+        show_progress=False,
+    )
+
+    opt.run(show_progress=False)
+    # Call analyze_locus and ensure no TypeError is raised
+    res = opt.analyze_locus(sample_points=5, max_refine_steps=2)
+    assert isinstance(res, list)
