@@ -177,7 +177,6 @@ def _evaluate_candidate_worker(
         min_neck_width_px,
         objective,
     ) = args
-
     t_start = time.perf_counter()
     t_geom = 0.0
     t_solver = 0.0

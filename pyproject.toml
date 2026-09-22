@@ -15,6 +15,14 @@ dependencies = [
 [tool.uv.workspace]
 members = ["packages/*"]
 
+[tool.uv.sources]
+phc-utils = { workspace = true }
+phc-hydra = { workspace = true }
+phc-layout = { workspace = true }
+phc-materials = { workspace = true }
+phc-mpb = { workspace = true }
+phc-optimization = { workspace = true }
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
@@ -36,5 +44,3 @@ markers = [
     "integration: End-to-end integration tests connecting multiple packages",
     "slow: Long-running electromagnetic simulation tests",
 ]
-
-
