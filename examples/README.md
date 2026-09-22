@@ -196,7 +196,7 @@ outputs/
 
 ### Output Artifacts Explained:
 1. **`unit_cell.gds`**: Physical CAD file containing the exact polygon shapes and boundaries.
-2. **`band_structure.png`**: High-symmetry band diagram ($\Gamma \to M \to K \to \Gamma$ or $\Gamma \to X \to M \to \Gamma$), displaying the light line and shading all omnidirectional band gaps with their fractional gap sizes ($\Delta\omega / \omega_0$).
+2. **`band_structure.png`**: High-symmetry band diagram ($M \to \Gamma \to K \to M$ or $X \to \Gamma \to M \to X$), displaying the light line and shading all omnidirectional band gaps with their fractional gap sizes ($\Delta\omega / \omega_0$).
 3. **`epsilon_map.png`**: Real-space map of the dielectric constant $\varepsilon(\mathbf{r})$ discretized on the solver grid.
 4. **`simulation_results.json`**: JSON record containing eigenfrequencies at each $k$-point, detected band gaps (lower bound, upper bound, gap size), and file paths.
 
@@ -214,4 +214,30 @@ python examples/plot_unit_cells.py quick=true
 python examples/plot_unit_cells.py
 ```
 Generated plot artifacts will be stored in `outputs/layout_plots/`.
+
+---
+
+## 9. 3D Slab Mode Parity (TE-like vs TM-like) & TE Fraction Analysis (`demo_slab_3d_mode_parity_te_fraction_mpb.py`)
+
+To analyze modal polarization parity and compare against continuous TE electric energy fractions, use [`examples/demo_slab_3d_mode_parity_te_fraction_mpb.py`](demo_slab_3d_mode_parity_te_fraction_mpb.py):
+
+```bash
+# Run 3D slab simulation with parity solving (TE-like / TM-like) and all-bands TE fraction
+python examples/demo_slab_3d_mode_parity_te_fraction_mpb.py
+
+# Fast smoke test
+python examples/demo_slab_3d_mode_parity_te_fraction_mpb.py --quick
+
+# Customize marker styles in unified band diagram
+python examples/demo_slab_3d_mode_parity_te_fraction_mpb.py --marker-te o --marker-tm ^
+```
+
+### Generated Artifacts:
+- **`band_structure.png`**: Unified band diagram rendering TE-like modes (circle `'o'`) and TM-like modes (triangle `'^'`) together on the same axes.
+- **`band_structure_te_fraction.png`**: All-bands dispersion diagram with discrete dots colored continuously by modal TE electric energy fraction $f_{\mathrm{TE}} \in [0, 1]$.
+- **`band_structure_comparison.png`**: Side-by-side 2-panel comparison juxtaposing mirror parity classification ($\sigma_z = \pm 1$) against continuous $f_{\mathrm{TE}}$.
+- **`epsilon_map.png`**: Dual-plane permittivity cross-sections (in-plane $xy$ midplane and vertical $xz$ cut).
+- **`unit_cell.gds`**: Physical GDS layout mask.
+- **`simulation_results.json`**: Structured JSON summary report.
+
 

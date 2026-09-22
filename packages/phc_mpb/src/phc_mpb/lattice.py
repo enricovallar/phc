@@ -152,30 +152,33 @@ def get_high_symmetry_kpath(
     if isinstance(lattice_type, HexagonalLattice):
         # Hexagonal lattice in crystallographic basis:
         # a1 = (1, 0, 0), a2 = (-0.5, sqrt(3)/2, 0)
+        # K-path convention: Γ is the second high-symmetry point (M→Γ→K→M)
         corners = [
-            (0.0, 0.0, 0.0),  # Gamma
             (0.0, 0.5, 0.0),  # M
+            (0.0, 0.0, 0.0),  # Gamma
             (1.0 / 3.0, 1.0 / 3.0, 0.0),  # K
-            (0.0, 0.0, 0.0),  # Gamma
+            (0.0, 0.5, 0.0),  # M
         ]
-        labels = ["Γ", "M", "K", "Γ"]
+        labels = ["M", "Γ", "K", "M"]
     elif isinstance(lattice_type, SquareLattice) or lattice_type == "square":
+        # K-path convention: Γ is the second high-symmetry point (X→Γ→M→X)
         corners = [
-            (0.0, 0.0, 0.0),  # Gamma
             (0.0, 0.5, 0.0),  # X
-            (0.5, 0.5, 0.0),  # M
             (0.0, 0.0, 0.0),  # Gamma
+            (0.5, 0.5, 0.0),  # M
+            (0.0, 0.5, 0.0),  # X
         ]
-        labels = ["Γ", "X", "M", "Γ"]
+        labels = ["X", "Γ", "M", "X"]
     elif lattice_type == "hexagonal":
         # Legacy hexagonal basis: basis1=(sqrt(3)/2, 1/2), basis2=(sqrt(3)/2, -1/2)
+        # K-path convention: Γ is the second high-symmetry point (M→Γ→K→M)
         corners = [
-            (0.0, 0.0, 0.0),  # Gamma
             (0.0, 0.5, 0.0),  # M
-            (-1.0 / 3.0, 1.0 / 3.0, 0.0),  # K
             (0.0, 0.0, 0.0),  # Gamma
+            (-1.0 / 3.0, 1.0 / 3.0, 0.0),  # K
+            (0.0, 0.5, 0.0),  # M
         ]
-        labels = ["Γ", "M", "K", "Γ"]
+        labels = ["M", "Γ", "K", "M"]
     elif isinstance(lattice_type, Lattice):
         # Infer geometry from in-plane basis angle
         a1_2d = np.array(lattice_type.a1[:2])

@@ -25,6 +25,7 @@ if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
 from omegaconf import DictConfig, OmegaConf
+from phc_hydra import resolve_simulation_output_dir
 from phc_layout.components import UNIT_CELL_DATABASE, list_unit_cells
 
 from examples.simulate_unit_cell import run_unit_cell_simulation
@@ -84,14 +85,15 @@ def run_all_band_diagrams_pipeline(
         # Complete database suite (all 16 unit cells)
         cells_to_run = list(UNIT_CELL_DATABASE.keys())
 
-    # 2. Resolve root output directory
+    # 2. Resolve root output directory via phc_hydra
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
-    if output_dir is not None:
-        batch_out_path = Path(output_dir)
-    else:
-        batch_out_path = Path("outputs") / "batch_band_diagrams" / timestamp
-
-    batch_out_path.mkdir(parents=True, exist_ok=True)
+    batch_out_path = resolve_simulation_output_dir(
+        solver=solver,
+        sim_type="batch_band_diagrams",
+        geometry="all_unit_cells",
+        timestamp=timestamp,
+        override_dir=output_dir,
+    )
 
     if verbose:
         print("\n" + "=" * 80)

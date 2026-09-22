@@ -172,8 +172,43 @@ flowchart TD
      - **Odd (TM-like)**: $\sigma_z = -1$, dominant out-of-plane $E$ field $\to$ `ms.run_zodd()`.
 4. **Light Cone & Guided Modes**:
    - Guided modes lie strictly below the cladding light line ($\omega \le c k_{||}$ or $\tilde{\omega} \le |k| / n_{\text{clad}}$).
-5. **Forward-Compatible Architecture**:
-   - `phc_mpb` is designed with a `dimension: Literal["2D", "3D_slab"] = "2D"` parameter. In 2D, heights are infinite; switching to 3D slab mode automatically uses the `LayerStack` thickness and vertical supercell without requiring any changes to geometry code.
+### 6.2 Anisotropic Mesh Resolution (x, y vs z)
+In 3D slab geometries, the vertical supercell must be large ($s_z \approx 4\text{--}6a$) to decouple evanescent leakage between vertical unit cell replicas. Setting an isotropic resolution $R$ results in $R \cdot s_z$ grid points along $z$, blowing up domain size and FFT compute time.
+
+MPB accepts an `mp.Vector3` for resolution:
+```python
+# e.g., 24 grid points per a in-plane, 8 points per a along z:
+ms = mpb.ModeSolver(
+    geometry_lattice=lattice,
+    geometry=geometry,
+    k_points=k_points,
+    resolution=mp.Vector3(24, 24, 8),
+    num_bands=6,
+)
+```
+In `phc_mpb`, pass either `resolution=(24, 24, 8)` or `resolution=24, resolution_z=8`.
+
+### 6.3 Multi-Worker Concurrent k-Point Wrapper
+Python MPB (`meep.mpb`) evaluates $k$-points sequentially on a single thread. Because each $k$-point eigenvalue solve is independent, `phc_mpb.run_parallel_band_solver` distributes $k$-points across multiple CPU cores via `concurrent.futures.ProcessPoolExecutor`:
+
+```python
+from phc_mpb import run_parallel_band_solver
+
+results = run_parallel_band_solver(
+    geometry_lattice=mpb_lat,
+    geometry=mpb_geom,
+    k_points=k_pts,
+    resolution=24,
+    resolution_z=8,
+    num_bands=6,
+    polarization="te_like",  # ms.run_zeven()
+    dimension="3D_slab",
+    num_workers=4,  # Concurrent worker processes
+    cladding_index=1.0,
+)
+```
+- **Light Line**: Computes $\tilde{\omega}_{\text{light}}(\mathbf{k}) = |\mathbf{k}_{\parallel}| / n_{\text{clad}}$.
+- **Guided Gaps**: Discovers true bound photonic band gaps residing strictly below the cladding light line.
 
 ---
 
@@ -202,6 +237,19 @@ gap_info = ms.retrieve_gap(1)  # returns percentage gap: 100 * (f_top - f_bot) /
 # 3. Retrieve dielectric epsilon distribution
 eps_grid = ms.get_epsilon()  # 2D/3D numpy array
 ```
+
+### 8.1 Dielectric Permittivity Visualization (2D vs 3D Slabs)
+- **2D Systems**: `plot_epsilon` renders a single in-plane map $\varepsilon(x, y)$.
+- **3D Slabs**: Per workspace SSOT rules, `plot_epsilon` automatically renders a unified 2-panel figure:
+  - **Left panel**: In-plane mid-plane slice $\varepsilon(x, y, z=z_{\text{mid}})$.
+  - **Right panel**: Vertical cross-section $\varepsilon(x, y=y_{\text{mid}}, z)$ showing slab thickness and cladding boundaries.
+- **No Interpolation**: `plot_epsilon` defaults to `interpolation="none"` to display raw discrete numerical grid voxels without artificial pixel smoothing.
+- **Vertical Periodicity Standard**: For 3D slabs, `get_epsilon_grid` defaults to `periods_z=1` so that only the single physical slab supercell is visualized vertically.
+
+
+### 8.2 Band Structure Visualization
+- **Discrete Dots**: `plot_band_structure` displays computed eigenfrequencies strictly as discrete dots (`marker="o"`, `linestyle="none"`), one dot per calculated $k$-point. Continuous lines connecting eigenvalues are prohibited to avoid implying artificial continuity across band anti-crossings or between sparse $k$-points. Analytical thresholds (such as the light line $\omega = c k_{\parallel}$) remain dashed lines.
+
 
 ---
 

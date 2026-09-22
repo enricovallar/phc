@@ -6,7 +6,7 @@ Demonstrates the Single Source of Truth (SSOT) architecture:
 2. Exports the physical GDSII file (outputs/phc_hex_unit_cell.gds).
 3. Queries optical material properties from phc_materials (Silicon, n = 3.48).
 4. Converts the GDS file directly into MPB geometric prisms (phc_mpb).
-5. Runs MPB ModeSolver across the irreducible Brillouin zone (Γ -> M -> K -> Γ).
+5. Runs MPB ModeSolver across the irreducible Brillouin zone (M -> Γ -> K -> M).
 6. Plots and saves the photonic band structure (outputs/band_diagram_hex_te.png).
 """
 

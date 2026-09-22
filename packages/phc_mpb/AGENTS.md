@@ -38,4 +38,9 @@
    - Compute fractional band gap percentage:
      $$\Delta\omega / \omega_0 = 2(\omega_{\text{top}} - \omega_{\text{bottom}}) / (\omega_{\text{top}} + \omega_{\text{bottom}}) \times 100\%$$
    - Highlight identified band gaps on band diagrams with semi-transparent shading and percentage labels.
-   - Plot the epsilon profile (if 3D slab then it is at the middle of the slab for the left plot and the cross section for the right plot)
+   - **Band Diagrams as Discrete Dots**: Band diagrams must always plot calculated eigenfrequencies as discrete dots (`marker="o"`, `linestyle="none"`), one dot per calculated $k$-point. Never connect eigenfrequencies with continuous lines. Analytical thresholds (such as the light line) remain dashed lines.
+   - **Epsilon Profiling Without Interpolation**: Permittivity grid plots (`plot_epsilon`) must use `interpolation="none"` by default to visualize exact discrete grid voxels without artificial smoothing.
+   - **3D Slab Permittivity Profiling**: For 3D slabs, permittivity distribution ($\varepsilon(\mathbf{r})$) plotting must generate a single unified figure with two subplots side by side:
+     - **Left Subplot**: In-plane $xy$ mid-plane slice ($z = z_{\text{mid}}$ / $z = 0$).
+     - **Right Subplot**: Vertical $xz$ cross-section cut ($y = y_{\text{mid}}$) displaying the slab thickness, vertical air cladding, and etch hole profile.
+     - **Vertical Periodicity Standard**: Vertical periodicity along $z$ must strictly remain 1 (`periods_z=1`) so that only a single physical slab membrane is displayed without artificial vertical repetitions.

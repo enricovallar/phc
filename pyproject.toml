@@ -24,9 +24,11 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = [
     ".",
+    "packages/phc_hydra/src",
     "packages/phc_layout/src",
     "packages/phc_materials/src",
     "packages/phc_mpb/src",
+    "packages/phc_optimization/src",
     "packages/phc_utils/src",
 ]
 addopts = "--import-mode=importlib"

@@ -55,6 +55,13 @@ DEFAULT_MATERIALS: dict[str, dict[str, Any]] = {
         "lumerical_name": "BaTiO3_Custom",
         "description": "Barium Titanate thin film",
     },
+    "inp": {
+        "type": "isotropic",
+        "index": 3.1,
+        "lumerical_name": "InP (Indium Phosphide) - Palik",
+        "description": "Indium Phosphide at 1550 nm",
+    },
+
 }
 
 

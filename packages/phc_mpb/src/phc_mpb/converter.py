@@ -59,6 +59,9 @@ def gds_to_mpb_geometry(
     pitch: float = 1.0,
     dimension: Literal["2D", "3D_slab"] = "2D",
     slab_thickness: float = 0.22,
+    slab_material: str | None = None,
+    substrate_material: str | None = None,
+    substrate_thickness: float | None = None,
     z_center: float = 0.0,
     etch_layer: tuple[int, int] = (1, 0),
     etch_material: str = "air",
@@ -75,6 +78,13 @@ def gds_to_mpb_geometry(
         pitch: Lattice constant a in microns (used for normalization).
         dimension: "2D" (infinite along z) or "3D_slab" (finite thickness).
         slab_thickness: Thickness of slab in microns (used when dimension='3D_slab').
+        slab_material: Optional material key for the dielectric slab core (e.g. "si").
+            If specified and dimension='3D_slab', an mp.Block covering the unit cell
+            with height slab_thickness / pitch is prepended before the etch holes.
+        substrate_material: Optional material key for the bottom substrate cladding (e.g. "sio2").
+            If specified and dimension='3D_slab', an mp.Block is placed below the slab.
+        substrate_thickness: Optional thickness of the substrate in microns. If None, fills
+            the lower half of the computational cell down to the supercell lower boundary.
         z_center: Vertical center of slab in microns.
         etch_layer: (layer, datatype) of the holes.
         etch_material: Material key for the holes (defaults to "air").
@@ -83,7 +93,7 @@ def gds_to_mpb_geometry(
             from Cartesian to the lattice vector basis.
 
     Returns:
-        List of mp.GeometricObject instances (Cylinder or Prism).
+        List of mp.GeometricObject instances (Block, Cylinder, or Prism).
     """
     # 1. Extract polygon objects in microns
     dbu = 0.001
@@ -126,6 +136,42 @@ def gds_to_mpb_geometry(
 
     # 3. Create MPB geometric objects with scaled dimensions (a = 1)
     objects = []
+
+    # Substrate block below slab
+    if dimension == "3D_slab" and substrate_material is not None:
+        sub_med = to_mpb_medium(substrate_material)
+        z_slab_bottom = (z_center - 0.5 * slab_thickness) / pitch
+        if substrate_thickness is not None:
+            sub_h = substrate_thickness / pitch
+            sub_cz = z_slab_bottom - 0.5 * sub_h
+        elif geom_lat is not None and hasattr(geom_lat, "size") and geom_lat.size.z > 0:
+            sz = float(geom_lat.size.z)
+            sub_bottom = -0.5 * sz
+            sub_h = max(0.0, z_slab_bottom - sub_bottom)
+            sub_cz = sub_bottom + 0.5 * sub_h
+        else:
+            sub_h = 10.0
+            sub_cz = z_slab_bottom - 0.5 * sub_h
+
+        if sub_h > 0:
+            objects.append(
+                mp.Block(
+                    center=mp.Vector3(0.0, 0.0, sub_cz),
+                    size=mp.Vector3(mp.inf, mp.inf, sub_h),
+                    material=sub_med,
+                )
+            )
+
+    if dimension == "3D_slab" and slab_material is not None:
+        slab_med = to_mpb_medium(slab_material)
+        objects.append(
+            mp.Block(
+                center=mp.Vector3(0.0, 0.0, z_center / pitch),
+                size=mp.Vector3(mp.inf, mp.inf, prism_height),
+                material=slab_med,
+            )
+        )
+
     for poly in polys:
         pts = _polygon_to_points(poly, dbu=dbu)
         if len(pts) < 3:

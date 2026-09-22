@@ -13,6 +13,12 @@ materials:
     lumerical_name: "Si (Silicon) - Palik"
     description: "Silicon at 1550 nm"
 
+  inp:
+    type: isotropic
+    index: 3.1
+    lumerical_name: "InP (Indium Phosphide) - Palik"
+    description: "Indium Phosphide at 1550 nm"
+
   sio2:
     type: isotropic
     index: 1.444

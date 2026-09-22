@@ -11,15 +11,13 @@ Integrates:
 7. Hydra-managed hierarchical outputs (outputs/<solver>/<sim_type>/<geometry>/<timestamp>/).
 """
 
-import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import hydra
-import matplotlib.pyplot as plt
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
+from phc_hydra import SimulationOutputManager
 from phc_layout.components import (
     UNIT_CELL_DATABASE,
     get_unit_cell,
@@ -37,7 +35,6 @@ from phc_mpb import (
     plot_epsilon,
     run_band_solver,
 )
-from phc_utils import export_gds
 
 
 def run_unit_cell_simulation(
@@ -102,16 +99,9 @@ def run_unit_cell_simulation(
         k_density = 2
         num_bands = 4
 
-    # Resolve output directory
-    if output_dir is not None:
-        out_path = Path(output_dir)
-    elif cfg_dict.get("output_dir"):
-        out_path = Path(cfg_dict["output_dir"])
-    else:
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
-        out_path = Path("outputs") / solver / sim_type / geom_name / timestamp
-
-    out_path.mkdir(parents=True, exist_ok=True)
+    # Resolve output directory via phc_hydra
+    output_manager = SimulationOutputManager.from_config(cfg, output_dir=output_dir)
+    out_path = output_manager.output_dir
 
     if verbose:
         print("\n=======================================================")
@@ -179,10 +169,9 @@ def run_unit_cell_simulation(
         )
 
     # -------------------------------------------------------------
-    # Step 2: GDS Export
+    # Step 2: GDS Export (phc_hydra)
     # -------------------------------------------------------------
-    gds_path = out_path / "unit_cell.gds"
-    export_gds(unit_cell, gds_path, overwrite=True)
+    gds_path = output_manager.save_gds(unit_cell, filename="unit_cell.gds")
     if verbose:
         print(f"      -> Exported GDS layout: {gds_path}")
 
@@ -285,32 +274,37 @@ def run_unit_cell_simulation(
     # Generate plots
     if verbose:
         print("[6/6] Generating visualization artifacts...")
-    band_plot_path = out_path / "band_structure.png"
     fig_band = plot_band_structure(
         results=results,
         node_labels=labels,
         node_indices=indices,
         title=f"Band Structure: {geom_name} ({polarization.upper()})",
-        save_path=band_plot_path,
     )
-    plt.close(fig_band)
+    output_manager.save_figure(
+        fig_band,
+        artifact_key="band_structure_plot",
+        filename="band_structure.png",
+        close=True,
+    )
 
     plot_periods = int(sim_cfg.get("plot_periods", 3))
-    eps_plot_path = out_path / "epsilon_map.png"
     eps_grid = get_epsilon_grid(
         ms, rectify=True, periodicity=plot_periods, resolution=resolution * 2
     )
     fig_eps = plot_epsilon(
         eps_grid,
         title=f"Dielectric Permittivity: {geom_name}",
-        save_path=eps_plot_path,
     )
-    plt.close(fig_eps)
+    output_manager.save_figure(
+        fig_eps,
+        artifact_key="epsilon_plot",
+        filename="epsilon_map.png",
+        close=True,
+    )
 
-    # Save summary JSON
-    results_json_path = out_path / "simulation_results.json"
-    summary_data = {
-        "geometry": {
+    # Save summary JSON (enforces mandatory GDS layout check)
+    output_manager.save_results_json(
+        geometry_cfg={
             "name": geom_name,
             "lattice_type": lattice_type,
             "point_group": point_group,
@@ -319,7 +313,7 @@ def run_unit_cell_simulation(
             "background_material": bg_mat_key,
             "etch_material": etch_mat_key,
         },
-        "simulation": {
+        simulation_cfg={
             "solver": solver,
             "sim_type": sim_type,
             "polarization": polarization,
@@ -327,17 +321,8 @@ def run_unit_cell_simulation(
             "num_bands": num_bands,
             "k_density": k_density,
         },
-        "band_gaps": detected_gaps,
-        "files": {
-            "gds": str(gds_path),
-            "band_structure_plot": str(band_plot_path),
-            "epsilon_plot": str(eps_plot_path),
-            "results_json": str(results_json_path),
-        },
-    }
-
-    with open(results_json_path, "w", encoding="utf-8") as f:
-        json.dump(summary_data, f, indent=2)
+        band_gaps=detected_gaps,
+    )
 
     if verbose:
         print(f"\nSimulation complete! All artifacts saved to: {out_path}\n")
@@ -346,7 +331,7 @@ def run_unit_cell_simulation(
         "results": results,
         "gaps": detected_gaps,
         "output_dir": out_path,
-        "files": summary_data["files"],
+        "files": output_manager.manifest,
         "mode_solver": ms,
     }
 
