@@ -1,6 +1,6 @@
 # %%
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 # %%
 
 import gdsfactory as gf
@@ -30,7 +30,7 @@ rect = phc.lattice_patch_c6v_rect(component=cb)
 rect.show()
 # %%
 h = phc.lattice_patch_c6v_hex(component=cb, rings=10)
-c = phc.get_component_hull(h, layer=LAYER_PHC.ETCH, margin=1)
+c = utils.get_component_hull(h, layer=LAYER_PHC.ETCH, margin=1)
 mirror = phc.lattice_patch_c6v_rect(circle_m, 99, 99, 1)
 mirror.show()
 mirror = gf.boolean(mirror, c, operation="-", layer=LAYER_PHC.ETCH)

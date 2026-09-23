@@ -17,3 +17,10 @@ def test_triangular_basis():
     assert isinstance(basis, gf.Component)
     # 1 center circle + 6 edge circles = 7 instances
     assert len(basis.insts) == 7
+
+
+def test_phc_get_component_hull():
+    c = gf.Component("test_hull_rect")
+    c << gf.components.rectangle(size=(10, 5))
+    hull = cmp.phc.get_component_hull(c, margin=1.0)
+    assert isinstance(hull, gf.Component)

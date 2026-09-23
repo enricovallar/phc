@@ -3,6 +3,16 @@
 import gdsfactory as gf
 import numpy as np
 
+from phc_layout.utils import get_component_hull
+
+__all__ = [
+    "array_hexagonal_patch",
+    "get_component_hull",
+    "lattice_patch_c6v_hex",
+    "lattice_patch_c6v_rect",
+    "lattice_patch_phc_C6v_rect",
+]
+
 
 @gf.cell
 def lattice_patch_c6v_rect(
