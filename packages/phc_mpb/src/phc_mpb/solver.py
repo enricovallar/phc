@@ -87,6 +87,11 @@ def run_band_solver(
     compute_symmetries: bool = False,
     symmetry_group: str = "C4v",
     verbose: bool = False,
+    slab_thickness: float | None = None,
+    z_center: float = 0.0,
+    polarization_method: Literal[
+        "midplane", "volumetric", "slab", "magnetic"
+    ] = "midplane",
 ) -> dict[str, Any]:
     """Executes the MPB ModeSolver with the specified polarization mode and optional parallelism.
 
@@ -105,6 +110,11 @@ def run_band_solver(
         symmetry_group: Point group name ('C4v' or 'C6v') when compute_symmetries is True.
         verbose: If True, streams MPB C-level iteration and band output to stdout.
             If False (default), silences solver chatter for clean execution.
+        slab_thickness: Optional normalized slab thickness in units of lattice constant a.
+            When provided, restricts field integration along z to the dielectric slab core
+            (|z - z_center| <= slab_thickness / 2), preventing dilution from substrate cladding.
+        z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
+        polarization_method: Evaluation method ('midplane', 'volumetric', 'slab', or 'magnetic'). Default is 'midplane'.
 
     Returns:
         Dict containing freqs (dict of arrays), gaps, light_line, polarization, dimension,
@@ -120,6 +130,9 @@ def run_band_solver(
             resolution_z=resolution_z,
             compute_polarization_fractions=compute_fractions,
             verbose=verbose,
+            polarization_method=polarization_method,
+            slab_thickness=slab_thickness,
+            z_center=z_center,
         )
     if not hasattr(ms, "run_te"):
         raise TypeError(f"Expected an mpb.ModeSolver instance, got {type(ms).__name__}")
@@ -150,7 +163,12 @@ def run_band_solver(
         if should_compute_fracs:
 
             def _fraction_callback(solver: Any) -> None:
-                fracs = compute_polarization_fractions(solver)
+                fracs = compute_polarization_fractions(
+                    solver,
+                    method=polarization_method,
+                    slab_thickness=slab_thickness,
+                    z_center=z_center,
+                )
                 if isinstance(fracs, list):
                     te_fractions_list.append([f["te"] for f in fracs])
 
@@ -182,7 +200,14 @@ def run_band_solver(
             run_fn(*callbacks)
 
         results["freqs"][pol_key] = np.copy(ms.all_freqs)
-        results["gaps"][pol_key] = [ms.retrieve_gap(b) for b in range(1, ms.num_bands)]
+        gaps_list = []
+        for b in range(1, ms.num_bands):
+            try:
+                g = ms.retrieve_gap(b)
+            except ZeroDivisionError:
+                g = 0.0
+            gaps_list.append(g)
+        results["gaps"][pol_key] = gaps_list
         if should_compute_fracs and te_fractions_list:
             results["te_fractions"] = np.array(te_fractions_list)
         if compute_group_velocities and vg_list:

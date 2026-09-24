@@ -59,6 +59,7 @@ def make_c4v_unit_cell(
     r1: float = 0.25,
     r2: float = 0.15,
     pitch: float = 1.0,
+    **kwargs: Any,
 ) -> gf.Component:
     """Generates a C4v square lattice photonic crystal unit cell with two hole radii.
 
@@ -69,6 +70,7 @@ def make_c4v_unit_cell(
         r1: Radius of primary hole at origin (micrometers).
         r2: Radius of secondary hole at center (micrometers).
         pitch: Lattice pitch a (micrometers).
+        **kwargs: Extra unused keyword arguments passed by generic runners.
 
     Returns:
         GDSFactory Component containing the physical mask layout.
@@ -118,7 +120,7 @@ def run_optimization_2d_pipeline(
     else:
         default_resolution = 18
         default_num_bands = 10
-        default_initial_points = 50
+        default_initial_points = 100
         default_max_iterations = 10
         default_batch_size = 4
         default_num_workers = 4
@@ -175,7 +177,12 @@ def run_optimization_2d_pipeline(
 
     locus_results = []
     if analyze_locus:
-        locus_results = opt.analyze_locus(delta_k=0.01)
+        locus_results = opt.analyze_locus(
+            delta_k=0.01,
+            exclude_unrefined=False,  # Keeps all 40 refined points
+            max_residual_gap=1e-4,
+            max_refine_steps=12,
+        )
 
     loci_file = result.output_dir / "optimal_loci.json"
     loci_data = []

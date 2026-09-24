@@ -104,3 +104,70 @@ def test_summarize_mode_physics():
     assert pytest.approx(summary["mean_confinement_guided"], 0.01) == 0.85
     assert pytest.approx(summary["mean_confinement_leaky"], 0.01) == 0.70
     assert len(summary["classification_matrix"]) == 2
+
+
+def test_compute_polarization_fractions_with_slab_core_masking():
+    """Verifies that slab_thickness and z_center core masking accurately computes polarization fractions."""
+    import meep as mp
+    from meep import mpb
+    from phc_mpb.classification import (
+        compute_modal_metrics,
+        compute_polarization_fractions,
+        compute_slab_confinement,
+    )
+
+    # 3D supercell with Si slab (center z=0, thickness=0.5, eps=12.25)
+    # and SiO2 substrate (center z=-1.25, thickness=1.5, eps=2.07)
+    lat = mp.Lattice(size=mp.Vector3(1, 1, 4))
+    geom = [
+        mp.Block(
+            center=mp.Vector3(0, 0, -1.25),
+            size=mp.Vector3(mp.inf, mp.inf, 1.5),
+            material=mp.Medium(index=1.44),
+        ),
+        mp.Block(
+            center=mp.Vector3(0, 0, 0),
+            size=mp.Vector3(mp.inf, mp.inf, 0.5),
+            material=mp.Medium(index=3.5),
+        ),
+    ]
+    ms = mpb.ModeSolver(
+        geometry_lattice=lat,
+        geometry=geom,
+        k_points=[mp.Vector3(0.2, 0, 0)],
+        resolution=16,
+        num_bands=2,
+    )
+    ms.run()
+
+    # 1. With core masking: slab_thickness=0.5, z_center=0.0
+    frac_core = compute_polarization_fractions(
+        ms, band_idx=1, slab_thickness=0.5, z_center=0.0
+    )
+    assert isinstance(frac_core, dict)
+    assert "te" in frac_core and "tm" in frac_core
+    assert 0.0 <= frac_core["te"] <= 1.0
+    assert abs(frac_core["te"] + frac_core["tm"] - 1.0) < 1e-4
+
+    # 2. Confinement with core masking
+    conf_core = compute_slab_confinement(
+        ms, band_idx=1, slab_thickness=0.5, z_center=0.0
+    )
+    assert isinstance(conf_core, float)
+    assert 0.0 <= conf_core <= 1.0
+
+    # 3. All bands metrics with core masking
+    metrics_all = compute_modal_metrics(ms, slab_thickness=0.5, z_center=0.0)
+    assert isinstance(metrics_all, list)
+    assert len(metrics_all) == 2
+    for m in metrics_all:
+        assert "te" in m and "tm" in m and "confinement" in m
+        assert 0.0 <= m["te"] <= 1.0
+        assert 0.0 <= m["tm"] <= 1.0
+        assert 0.0 <= m["confinement"] <= 1.0
+        assert abs(m["te"] + m["tm"] - 1.0) < 1e-4
+
+    # 4. Backward compatibility: without slab_thickness (None)
+    frac_compat = compute_polarization_fractions(ms, band_idx=1)
+    assert isinstance(frac_compat, dict)
+    assert 0.0 <= frac_compat["te"] <= 1.0

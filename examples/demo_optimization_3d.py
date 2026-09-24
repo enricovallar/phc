@@ -34,6 +34,18 @@ Command-Line Usage:
     # Refine continuous degeneracy locus and compute adjacent group velocities:
     python examples/demo_optimization_3d.py --analyze-locus
 
+    # Refine locus with 10 sample points and target wavelength / thickness:
+    python examples/demo_optimization_3d.py --analyze-locus --sample-points 10 --target-wavelength 1.55 --target-thickness 0.5
+
+    # Post-process existing locus to find target point and update figures (no re-optimization):
+    python examples/demo_optimization_3d.py --load-locus outputs/mpb/optimization/c4v_dirac_3d/.../optimal_loci.json --target-frequency 0.40
+
+    # Auto-load the most recent locus run without specifying PATH:
+    python examples/demo_optimization_3d.py --load-locus --target-wavelength-nm 1550 --target-thickness-nm 250
+
+    # Post-process latest locus and execute comparative SiO2 substrate band simulation:
+    python examples/demo_optimization_3d.py --load-locus --compare-substrate
+
 CLI Options:
     --quick              Run in rapid smoke-test mode with minimal resolution and evaluations.
     --resolution RES     In-plane (x, y) mesh resolution per unit pitch a (default: 20, quick: 12).
@@ -47,6 +59,15 @@ CLI Options:
     --output-dir PATH    Custom output directory override (default: auto-resolved by phc_hydra).
     --no-progress        Disable the real-time tqdm progress bar.
     --analyze-locus      Refine continuous degeneracy locus curve and compute adjacent group velocity.
+    --sample-points N    Number of points sampled along the continuous degeneracy locus (default: 10).
+    --target-wavelength W Target operating wavelength in micrometers for Dirac frequency scaling (default: 1.55).
+    --target-thickness H  Target slab membrane thickness in micrometers (default: slab_thickness).
+    --target-wavelength-nm NM Target operating wavelength in nanometers (e.g. 1550 for 1.55 um).
+    --target-thickness-nm NM  Target slab membrane thickness in nanometers (e.g. 250 for 0.25 um, 500 for 0.5 um).
+    --target-frequency FREQ Direct target normalized Dirac frequency (omega * a / 2pi c) override.
+    --load-locus [PATH]  Load existing locus to process without re-optimizing. If PATH is omitted, auto-resolves most recent run.
+    --compare-substrate  Run comparative band structure analysis between air membrane and SiO2 substrate at target point.
+    --num-bands-substrate N Number of eigenbands for SiO2 substrate simulation (default: 2.5 * num_bands).
 """
 
 import argparse
@@ -57,7 +78,15 @@ from typing import Any
 import gdsfactory as gf
 import meep as mp
 from phc_layout.components.unit_cell import phc_wyckoff_unit_cell
-from phc_optimization import BayesianOptimizer
+from phc_optimization import (
+    BayesianOptimizer,
+    find_latest_locus_path,
+    find_target_locus_point,
+    load_loci_from_json,
+    load_locus_from_csv,
+    plot_locus_dirac_frequency,
+    run_substrate_band_comparison,
+)
 
 # Suppress MPB solver chatter and repetitive Sobol balance warnings
 mp.verbosity(0)
@@ -70,6 +99,7 @@ def make_c4v_slab_unit_cell(
     r2: float = 0.15,
     pitch: float = 1.0,
     slab_thickness: float = 0.5,
+    **kwargs: Any,
 ) -> gf.Component:
     """Generates a C4v square lattice photonic crystal unit cell for a 3D slab membrane.
 
@@ -81,6 +111,7 @@ def make_c4v_slab_unit_cell(
         r2: Radius of secondary hole at center (micrometers).
         pitch: Lattice pitch a (micrometers).
         slab_thickness: Slab membrane thickness (micrometers).
+        **kwargs: Extra unused keyword arguments passed by generic runners.
 
     Returns:
         GDSFactory Component containing the physical mask layout.
@@ -105,6 +136,15 @@ def run_optimization_3d_pipeline(
     output_dir: Path | str | None = None,
     show_progress: bool = True,
     analyze_locus: bool = False,
+    sample_points: int = 10,
+    target_wavelength: float = 1.55,
+    target_thickness: float | None = None,
+    target_frequency: float | None = None,
+    target_wavelength_nm: float | None = None,
+    target_thickness_nm: float | None = None,
+    load_locus: Path | str | None = None,
+    compare_substrate: bool = False,
+    num_bands_substrate: int | None = None,
 ) -> dict[str, Any]:
     """Runs the 3D PhC slab Bayesian Optimization pipeline for Dirac cone engineering.
 
@@ -122,10 +162,24 @@ def run_optimization_3d_pipeline(
         output_dir: Custom output directory or None to auto-resolve via phc_hydra.
         show_progress: Whether to display a real-time tqdm progress bar during search.
         analyze_locus: If True, executes 1D secant locus refinement and adjacent-point group velocity evaluation.
+        sample_points: Number of points sampled along the continuous degeneracy locus (default: 10).
+        target_wavelength: Desired operating wavelength in micrometers for Dirac frequency scaling (default: 1.55).
+        target_thickness: Desired slab membrane thickness in micrometers (default: slab_thickness).
+        target_frequency: Optional direct normalized Dirac frequency override (omega * a / 2pi c).
+        target_wavelength_nm: Optional operating wavelength in nanometers (e.g. 1550).
+        target_thickness_nm: Optional slab thickness in nanometers (e.g. 250).
+        load_locus: Optional path to optimal_loci.json, locus_points.csv, or 'latest' to auto-resolve most recent run.
+        compare_substrate: If True, executes comparative band structure analysis on a SiO2 substrate at the target point.
+        num_bands_substrate: Number of eigenbands computed for the SiO2 substrate slab (default: 2.5 * num_bands).
 
     Returns:
-        Dictionary containing best parameters, best FOM, residual cost, and output directory.
+        Dictionary containing optimization results or loaded locus target analysis.
     """
+    if target_wavelength_nm is not None:
+        target_wavelength = float(target_wavelength_nm) / 1000.0
+    if target_thickness_nm is not None:
+        target_thickness = float(target_thickness_nm) / 1000.0
+
     if quick:
         default_res_xy = 12
         default_res_z = 6
@@ -142,10 +196,10 @@ def run_optimization_3d_pipeline(
         default_res_xy = 16
         default_res_z = 20
         default_num_bands = 10
-        default_initial_points = 40
-        default_max_iterations = 3
-        default_batch_size = 4
-        default_num_workers = 4
+        default_initial_points = 10
+        default_max_iterations = 5
+        default_batch_size = 20
+        default_num_workers = 20
         bypass_irrep = True
         mode_indices = [8, 9, 10]
         target_irreps = ["A_2", "E", "E"]
@@ -163,6 +217,135 @@ def run_optimization_3d_pipeline(
     # 3D grid resolution tuple (rx, ry, rz)
     grid_resolution = (r_xy, r_xy, r_z)
 
+    # -------------------------------------------------------------------------
+    # Mode A: Post-process existing locus without re-running Bayesian optimization
+    # -------------------------------------------------------------------------
+    if load_locus is not None:
+        if isinstance(load_locus, bool) or str(load_locus).strip().lower() in (
+            "latest",
+            "auto",
+            "true",
+            "",
+        ):
+            raw_p = find_latest_locus_path(geometry="c4v_dirac_3d")
+            print(f"Auto-resolved latest locus file: '{raw_p}'")
+        else:
+            raw_p = Path(load_locus).resolve()
+
+        if output_dir is not None:
+            out_path = Path(output_dir).resolve()
+        else:
+            out_path = raw_p if raw_p.is_dir() else raw_p.parent
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        if raw_p.suffix.lower() == ".csv":
+            loci = [load_locus_from_csv(raw_p)]
+        else:
+            loci = load_loci_from_json(raw_p)
+
+        if not loci:
+            raise ValueError(f"No locus found in '{raw_p}'.")
+
+        target_info = None
+        for locus in loci:
+            l_id = locus.get("locus_id", 1)
+            p1_n = locus.get("p1_name", "r1")
+            p2_n = locus.get("p2_name", "r2")
+            _opt_idx, target_info = find_target_locus_point(
+                locus=locus,
+                target_wavelength=target_wavelength,
+                target_thickness=target_thickness,
+                target_frequency=target_frequency,
+                target_wavelength_nm=target_wavelength_nm,
+                target_thickness_nm=target_thickness_nm,
+                slab_thickness=0.5,
+                pitch=1.0,
+            )
+            print(
+                f"\nTarget Design along Locus #{l_id} (Point #{target_info['point_idx']}):"
+            )
+            print(
+                f"  {p1_n} = {target_info.get(p1_n, 0.0):.4f}, {p2_n} = {target_info.get(p2_n, 0.0):.4f}"
+            )
+            print(f"  Dirac frequency:    ω_D = {target_info['omega_d']:.5f}")
+            print(
+                f"  Target frequency:   ω_target = {target_info['ideal_omega_d']:.5f}"
+            )
+            print(
+                f"  Pitch:              a = {target_info['pitch']:.4f} μm ({target_info['pitch_nm']:.1f} nm)"
+            )
+            print(
+                f"  Slab thickness:     h = {target_info['thickness']:.4f} μm ({target_info['thickness_nm']:.1f} nm)"
+            )
+            print(
+                f"  Target wavelength:  λ = {target_info['target_wavelength']:.4f} μm ({target_info['target_wavelength_nm']:.1f} nm)"
+            )
+            print(
+                f"  Target thickness:   h_target = {target_info['target_thickness']:.4f} μm ({target_info['target_thickness_nm']:.1f} nm)"
+            )
+            print(f"  Frequency (THz):    f = {target_info['frequency_thz']:.2f} THz")
+
+            locus_sub_dir = (
+                out_path / f"locus_{l_id:02d}"
+                if (out_path / f"locus_{l_id:02d}").is_dir()
+                else out_path
+            )
+            fig_df_path = locus_sub_dir / "locus_dirac_frequency.png"
+            plot_locus_dirac_frequency(
+                locus=locus,
+                param_names=[p1_n, p2_n],
+                target_wavelength=target_wavelength,
+                target_thickness=target_thickness,
+                target_frequency=target_frequency,
+                target_wavelength_nm=target_wavelength_nm,
+                target_thickness_nm=target_thickness_nm,
+                slab_thickness=0.5,
+                pitch=1.0,
+                output_path=fig_df_path,
+                title=rf"Degeneracy Locus #{l_id} Dirac Frequency ($\tilde{{\omega}}_D$ vs $s$)",
+            )
+            print(f"  Saved Dirac frequency figure to '{fig_df_path}'")
+
+            if compare_substrate:
+                sub_res = run_substrate_band_comparison(
+                    cell_factory=make_c4v_slab_unit_cell,
+                    params={
+                        p1_n: target_info[p1_n],
+                        p2_n: target_info[p2_n],
+                        "pitch": 1.0,
+                        "slab_thickness": 0.5,
+                        "supercell_z": sz,
+                    },
+                    pitch=1.0,
+                    slab_thickness=0.5,
+                    supercell_z=sz,
+                    lattice_type="square",
+                    matrix_material="inp",
+                    background_material="air",
+                    substrate_material="sio2",
+                    resolution=grid_resolution,
+                    num_bands=bands_val,
+                    num_bands_substrate=num_bands_substrate,
+                    k_density=4 if quick else 12,
+                    num_workers=n_workers,
+                    target_frequency=target_info["omega_d"],
+                    output_dir=locus_sub_dir,
+                    verbose=True,
+                )
+                locus["substrate_comparison"] = {
+                    "output_path": str(sub_res.get("output_path", "")),
+                    "target_frequency": sub_res.get("target_frequency"),
+                }
+
+        return {
+            "optimal_loci": loci,
+            "target_point": target_info,
+            "output_dir": str(out_path),
+        }
+
+    # -------------------------------------------------------------------------
+    # Mode B: Run full Bayesian optimization
+    # -------------------------------------------------------------------------
     opt = BayesianOptimizer(
         cell_factory=make_c4v_slab_unit_cell,
         parameters={
@@ -215,7 +398,19 @@ def run_optimization_3d_pipeline(
 
     locus_results = []
     if analyze_locus:
-        locus_results = opt.analyze_locus(delta_k=0.01)
+        locus_results = opt.analyze_locus(
+            sample_points=sample_points,
+            target_wavelength=target_wavelength,
+            target_thickness=target_thickness,
+            target_frequency=target_frequency,
+            target_wavelength_nm=target_wavelength_nm,
+            target_thickness_nm=target_thickness_nm,
+            compare_substrate=compare_substrate,
+            num_bands_substrate=num_bands_substrate,
+            delta_k=0.01,
+            exclude_unrefined=False,
+            max_refine_steps=10,
+        )
 
     loci_file = result.output_dir / "optimal_loci.json"
     loci_data = []
@@ -311,6 +506,60 @@ def main() -> None:
         action="store_true",
         help="Refine continuous degeneracy locus curve and compute adjacent group velocity.",
     )
+    parser.add_argument(
+        "--sample-points",
+        type=int,
+        default=10,
+        help="Number of points sampled along the continuous degeneracy locus (default: 10).",
+    )
+    parser.add_argument(
+        "--target-wavelength",
+        type=float,
+        default=1.55,
+        help="Target operating wavelength in micrometers for Dirac frequency scaling (default: 1.55).",
+    )
+    parser.add_argument(
+        "--target-thickness",
+        type=float,
+        default=None,
+        help="Target slab membrane thickness in micrometers (default: slab_thickness).",
+    )
+    parser.add_argument(
+        "--target-wavelength-nm",
+        type=float,
+        default=None,
+        help="Target operating wavelength in nanometers (e.g. 1550 for 1.55 um).",
+    )
+    parser.add_argument(
+        "--target-thickness-nm",
+        type=float,
+        default=None,
+        help="Target slab membrane thickness in nanometers (e.g. 250 for 0.25 um, 500 for 0.5 um).",
+    )
+    parser.add_argument(
+        "--target-frequency",
+        type=float,
+        default=None,
+        help="Direct target normalized Dirac frequency (omega * a / 2pi c) override.",
+    )
+    parser.add_argument(
+        "--load-locus",
+        nargs="?",
+        const="latest",
+        default=None,
+        help="Path to optimal_loci.json, locus_points.csv, or output dir to process without re-running optimization. If PATH is omitted, auto-resolves most recent run.",
+    )
+    parser.add_argument(
+        "--compare-substrate",
+        action="store_true",
+        help="Run comparative band structure analysis between air membrane and SiO2 substrate at target point.",
+    )
+    parser.add_argument(
+        "--num-bands-substrate",
+        type=int,
+        default=None,
+        help="Number of eigenbands for SiO2 substrate simulation (default: 2.5 * num_bands).",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
@@ -329,20 +578,37 @@ def main() -> None:
         output_dir=args.output_dir,
         show_progress=not args.no_progress,
         analyze_locus=args.analyze_locus,
+        sample_points=args.sample_points,
+        target_wavelength=args.target_wavelength,
+        target_thickness=args.target_thickness,
+        target_frequency=args.target_frequency,
+        target_wavelength_nm=args.target_wavelength_nm,
+        target_thickness_nm=args.target_thickness_nm,
+        load_locus=args.load_locus,
+        compare_substrate=args.compare_substrate,
+        num_bands_substrate=args.num_bands_substrate,
     )
     print("\n" + "=" * 70)
-    print(" Optimization Complete! ")
-    print(f"  Best Parameters: {res['best_params']}")
-    print(f"  Best FOM:        {res['best_fom']:.2f}")
-    print(f"  Residual Cost:   {res['best_cost']:.6f}")
-    print(f"  Evaluations:     {res['total_evaluations']}")
+    print(" Execution Complete! ")
+    if "best_params" in res:
+        print(f"  Best Parameters: {res['best_params']}")
+        print(f"  Best FOM:        {res['best_fom']:.2f}")
+        print(f"  Residual Cost:   {res['best_cost']:.6f}")
+        print(f"  Evaluations:     {res['total_evaluations']}")
+    if res.get("target_point"):
+        tp = res["target_point"]
+        print(f"  Target Point:    Index #{tp['point_idx']}, ω_D = {tp['omega_d']:.5f}")
+        print(f"  Physical Pitch:  a = {tp['pitch']:.4f} μm ({tp['pitch_nm']:.1f} nm)")
+        print(
+            f"  Slab Thickness:  h = {tp['thickness']:.4f} μm ({tp['thickness_nm']:.1f} nm)"
+        )
     if res.get("optimal_loci"):
         print(
-            f"  Degeneracy Loci: {len(res['optimal_loci'])} manifold curve(s) extracted (optimal_loci.json)"
+            f"  Degeneracy Loci: {len(res['optimal_loci'])} manifold curve(s) loaded/extracted"
         )
     if res.get("refined_loci"):
         print(
-            f"  Refined Loci:    {len(res['refined_loci'])} refined locus manifold(s) analyzed with group velocity"
+            f"  Refined Loci:    {len(res['refined_loci'])} refined locus manifold(s) analyzed"
         )
     print(f"  Output Folder:   {res['output_dir']}")
     print("=" * 70)

@@ -591,3 +591,524 @@ def plot_locus_profile(
         fig.savefig(p, bbox_inches="tight")
 
     return fig
+
+
+def plot_locus_dirac_frequency(
+    locus: dict[str, Any],
+    param_names: Sequence[str] | None = None,
+    target_wavelength: float = 1.55,
+    target_thickness: float | None = None,
+    target_frequency: float | None = None,
+    target_wavelength_nm: float | None = None,
+    target_thickness_nm: float | None = None,
+    slab_thickness: float = 0.5,
+    pitch: float = 1.0,
+    output_path: Path | str | None = None,
+    title: str = "Dirac Frequency along Optimal Degeneracy Locus",
+    show_inset: bool = True,
+) -> plt.Figure:
+    """Plots a 2-panel figure analyzing the Dirac frequency along the degeneracy locus.
+
+    - Panel (a) on left: Dirac frequency omega_D vs arc length s(x1, x2) along the locus curve,
+      including an optional parameter space (x1 vs x2) trajectory inset.
+    - Panel (b) on right: Dirac frequency omega_D vs discrete sample point index.
+
+    In both panels, highlights the design point closest to the specified target wavelength
+    and target slab thickness, annotating the exact normalized Dirac frequency, required
+    physical pitch, resulting physical thickness, and equivalent optical frequency (THz).
+
+    Dimensional Scaling:
+        Normalized frequency omega_D = a / lambda.
+        For a target wavelength lambda_target and unit-cell thickness ratio eta = h_sim / a_sim,
+        the required pitch is a = omega_D * lambda_target, and the physical thickness is
+        h = eta * a = eta * omega_D * lambda_target.
+        The design point closest to both targets minimizes |h - target_thickness|.
+
+    Args:
+        locus: Locus dictionary containing 'x1', 'x2', and 'dirac_frequency' (or 'omega_d').
+        param_names: Optional sequence of parameter names (e.g. ['r1', 'r2']).
+        target_wavelength: Desired operating wavelength lambda_target in micrometers (default: 1.55).
+        target_thickness: Desired slab membrane thickness h_target in micrometers.
+            If None, defaults to slab_thickness.
+        slab_thickness: Slab thickness h_sim in the simulation (or ratio h/a, default: 0.5).
+        pitch: Lattice pitch a_sim in the simulation (default: 1.0).
+        output_path: Optional path to save the generated figure.
+        title: Overall plot figure title.
+        show_inset: Whether to display a parameter space trajectory inset in panel (a).
+
+    Returns:
+        Matplotlib Figure object containing the 2-panel Dirac frequency analysis.
+
+    Raises:
+        ValueError: If locus lacks valid coordinate or Dirac frequency arrays.
+    """
+    if target_wavelength_nm is not None:
+        target_wavelength = float(target_wavelength_nm) / 1000.0
+    if target_thickness_nm is not None:
+        target_thickness = float(target_thickness_nm) / 1000.0
+
+    p1_name = (
+        param_names[0]
+        if param_names and len(param_names) >= 1
+        else locus.get("p1_name", "x1")
+    )
+    p2_name = (
+        param_names[1]
+        if param_names and len(param_names) >= 2
+        else locus.get("p2_name", "x2")
+    )
+    p1_label = f"${p1_name}/a$" if not p1_name.startswith("$") else p1_name
+    p2_label = f"${p2_name}/a$" if not p2_name.startswith("$") else p2_name
+
+    x1_vals = np.asarray(locus.get("x1", []), dtype=float)
+    x2_vals = np.asarray(locus.get("x2", []), dtype=float)
+    n_pts = len(x1_vals)
+    if n_pts == 0:
+        raise ValueError("Locus contains no points ('x1' is empty).")
+
+    df_raw = locus.get(
+        "dirac_frequency",
+        locus.get("omega_d", locus.get("freq_middle", [])),
+    )
+    if not df_raw or len(df_raw) == 0:
+        raise ValueError(
+            "Locus does not contain 'dirac_frequency' or 'omega_d'. "
+            "Ensure Dirac frequencies are evaluated before plotting."
+        )
+    omega_d = np.asarray(df_raw, dtype=float)
+    if len(omega_d) != n_pts:
+        raise ValueError(
+            f"Dimension mismatch: 'x1' has {n_pts} points, but 'dirac_frequency' has {len(omega_d)} values."
+        )
+
+    if n_pts > 1:
+        dx1 = np.diff(x1_vals)
+        dx2 = np.diff(x2_vals)
+        arc_lengths = np.concatenate(([0.0], np.cumsum(np.hypot(dx1, dx2))))
+    else:
+        arc_lengths = np.array([0.0])
+
+    sample_indices = np.arange(1, n_pts + 1)
+
+    target_h = (
+        float(target_thickness)
+        if target_thickness is not None
+        else float(slab_thickness)
+    )
+    eta = float(slab_thickness) / max(float(pitch), 1e-12)
+
+    if target_frequency is not None:
+        ideal_omega_d = float(target_frequency)
+        errors = np.abs(omega_d - ideal_omega_d)
+    else:
+        # Ideal Dirac frequency if both targets are matched exactly:
+        ideal_omega_d = target_h / max(eta * target_wavelength, 1e-12)
+        h_vals = eta * omega_d * target_wavelength
+        errors = np.abs(h_vals - target_h)
+
+    opt_idx = int(np.argmin(errors))
+    opt_omega_d = float(omega_d[opt_idx])
+    opt_s = float(arc_lengths[opt_idx])
+    opt_pt_idx = int(sample_indices[opt_idx])
+    opt_a = float(opt_omega_d * target_wavelength)
+    opt_h = float(eta * opt_a)
+    opt_x1 = float(x1_vals[opt_idx])
+    opt_x2 = float(x2_vals[opt_idx])
+
+    # Physical frequency in THz: f = c / lambda
+    c_light = 299792458.0
+    f_thz = (c_light / (target_wavelength * 1e-6)) * 1e-12
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.2, 5.2), dpi=150)
+    fig.subplots_adjust(top=0.88, bottom=0.14, wspace=0.30)
+
+    # -------------------------------------------------------------
+    # Panel (a): omega_D vs s(x1, x2)
+    # -------------------------------------------------------------
+    ax1.plot(
+        arc_lengths,
+        omega_d,
+        "-o",
+        color="#005A9E",
+        linewidth=2.0,
+        markersize=5,
+        label=r"$\tilde{\omega}_D(s)$",
+        zorder=3,
+    )
+
+    min_w = float(np.min(omega_d))
+    max_w = float(np.max(omega_d))
+    span_w = max_w - min_w if max_w > min_w else 0.05
+    if (min_w - 0.5 * span_w) <= ideal_omega_d <= (max_w + 0.5 * span_w):
+        ax1.axhline(
+            ideal_omega_d,
+            color="#D9534F",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.85,
+            label=rf"Target $\tilde{{\omega}}_D = {ideal_omega_d:.4f}$",
+            zorder=2,
+        )
+
+    # Highlight optimal point
+    ax1.scatter(
+        opt_s,
+        opt_omega_d,
+        marker="*",
+        s=260,
+        facecolor="#FFD700",
+        edgecolor="#8B0000",
+        linewidth=1.5,
+        zorder=6,
+        label=f"Closest Match (Pt #{opt_pt_idx})",
+    )
+
+    callout_str = (
+        f"Closest Match (Pt #{opt_pt_idx}):\n"
+        f"  $\\tilde{{\\omega}}_D = {opt_omega_d:.5f}$\n"
+        f"  $f = {f_thz:.2f}$ THz ($\\lambda = {target_wavelength:.3f}\\,\\mu$m)\n"
+        f"  $a = {opt_a * 1e3:.1f}$ nm, $h = {opt_h * 1e3:.1f}$ nm\n"
+        f"  ${p1_name} = {opt_x1:.4f}$, ${p2_name} = {opt_x2:.4f}$"
+    )
+    near_top = (opt_omega_d - min_w) / max(span_w, 1e-12) > 0.65
+    y_off_a = -65 if near_top else 20
+    x_off_a = 20 if opt_idx < n_pts // 2 else -140
+    xy_text_offset_a = (x_off_a, y_off_a)
+    ax1.annotate(
+        callout_str,
+        xy=(opt_s, opt_omega_d),
+        xytext=xy_text_offset_a,
+        textcoords="offset points",
+        fontsize=8.5,
+        bbox={
+            "boxstyle": "round,pad=0.4",
+            "facecolor": "#FFFFE0",
+            "edgecolor": "#B8860B",
+            "alpha": 0.9,
+        },
+        arrowprops={
+            "arrowstyle": "->",
+            "connectionstyle": "arc3,rad=0.2" if not near_top else "arc3,rad=-0.2",
+            "color": "#8B0000",
+            "lw": 1.2,
+        },
+        zorder=7,
+    )
+
+    ax1.set_xlabel(
+        rf"Arc Length $s({p1_name}, {p2_name})$ [$\mu$m]",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax1.set_ylabel(
+        r"Dirac Frequency $\tilde{\omega}_D = \omega a / (2\pi c)$",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax1.set_title(
+        rf"(a) $\tilde{{\omega}}_D$ vs $s({p1_name}, {p2_name})$",
+        fontsize=11.5,
+        fontweight="bold",
+    )
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    ax1.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+    ax1.margins(y=0.18)
+    ax1.legend(
+        loc="lower left" if near_top else "upper left",
+        frameon=True,
+        framealpha=0.85,
+        fontsize=8.5,
+    )
+
+    # Inset on Left Panel
+    if show_inset and n_pts >= 2:
+        ax_ins = ax1.inset_axes([0.58, 0.12, 0.38, 0.35])
+        ax_ins.plot(x1_vals, x2_vals, "--", color="#888888", linewidth=1.2)
+        ax_ins.scatter(
+            x1_vals,
+            x2_vals,
+            c=omega_d,
+            cmap="viridis",
+            s=20,
+            zorder=3,
+        )
+        ax_ins.scatter(
+            opt_x1,
+            opt_x2,
+            marker="*",
+            s=130,
+            facecolor="#FFD700",
+            edgecolor="#8B0000",
+            linewidth=1.2,
+            zorder=5,
+        )
+        ax_ins.set_xlabel(p1_label, fontsize=7.5)
+        ax_ins.set_ylabel(p2_label, fontsize=7.5)
+        ax_ins.tick_params(labelsize=6.5)
+        ax_ins.set_title(
+            rf"Trajectory $({p1_name}, {p2_name})$",
+            fontsize=7.5,
+            fontweight="bold",
+        )
+
+    # -------------------------------------------------------------
+    # Panel (b): omega_D vs sample point
+    # -------------------------------------------------------------
+    ax2.plot(
+        sample_indices,
+        omega_d,
+        "-s",
+        color="#2E7D32",
+        linewidth=1.8,
+        markersize=5,
+        label=r"$\tilde{\omega}_D(i)$",
+        zorder=3,
+    )
+    if (min_w - 0.5 * span_w) <= ideal_omega_d <= (max_w + 0.5 * span_w):
+        ax2.axhline(
+            ideal_omega_d,
+            color="#D9534F",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.85,
+            label=rf"Target $\tilde{{\omega}}_D = {ideal_omega_d:.4f}$",
+            zorder=2,
+        )
+
+    # Highlight optimal point
+    ax2.scatter(
+        opt_pt_idx,
+        opt_omega_d,
+        marker="*",
+        s=260,
+        facecolor="#FFD700",
+        edgecolor="#8B0000",
+        linewidth=1.5,
+        zorder=6,
+        label=f"Closest Match (Pt #{opt_pt_idx})",
+    )
+
+    y_off_b = -40 if near_top else 20
+    x_off_b = -80 if opt_idx > n_pts // 2 else 15
+    xy_text_offset_b = (x_off_b, y_off_b)
+    ax2.annotate(
+        f"Pt #{opt_pt_idx}: $\\tilde{{\\omega}}_D = {opt_omega_d:.5f}$\n$f = {f_thz:.2f}$ THz",
+        xy=(opt_pt_idx, opt_omega_d),
+        xytext=xy_text_offset_b,
+        textcoords="offset points",
+        fontsize=8.5,
+        bbox={
+            "boxstyle": "round,pad=0.4",
+            "facecolor": "#E8F5E9",
+            "edgecolor": "#2E7D32",
+            "alpha": 0.9,
+        },
+        arrowprops={
+            "arrowstyle": "->",
+            "connectionstyle": "arc3,rad=-0.2",
+            "color": "#2E7D32",
+            "lw": 1.2,
+        },
+        zorder=7,
+    )
+
+    ax2.set_xlabel("Sample Point Index", fontsize=11, fontweight="bold")
+    ax2.set_ylabel(
+        r"Dirac Frequency $\tilde{\omega}_D = \omega a / (2\pi c)$",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax2.set_title(
+        r"(b) $\tilde{\omega}_D$ vs Sample Point",
+        fontsize=11.5,
+        fontweight="bold",
+    )
+    ax2.grid(True, linestyle=":", alpha=0.6)
+    ax2.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+    ax2.margins(y=0.18)
+    if n_pts <= 20:
+        ax2.set_xticks(sample_indices)
+    ax2.legend(
+        loc="lower left" if near_top else "upper left",
+        frameon=True,
+        framealpha=0.85,
+        fontsize=8.5,
+    )
+
+    fig.suptitle(title, fontsize=12.5, fontweight="bold", y=0.98)
+
+    best_match_info = {
+        "index": opt_idx,
+        "point_idx": opt_pt_idx,
+        "arc_length": opt_s,
+        "omega_d": opt_omega_d,
+        "ideal_omega_d": ideal_omega_d,
+        "target_wavelength": float(target_wavelength),
+        "target_thickness": float(target_h),
+        "pitch": opt_a,
+        "thickness": opt_h,
+        "frequency_thz": f_thz,
+        p1_name: opt_x1,
+        p2_name: opt_x2,
+        "thickness_error": float(abs(opt_h - target_h)),
+        "frequency_error": float(abs(opt_omega_d - ideal_omega_d)),
+    }
+    locus["optimal_match"] = best_match_info
+    fig._optimal_match = best_match_info  # type: ignore[attr-defined]
+
+    if output_path is not None:
+        p = Path(output_path).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(p, bbox_inches="tight")
+
+    return fig
+
+
+def plot_band_structure_comparison(
+    results_air: dict[str, Any],
+    results_substrate: dict[str, Any],
+    node_labels: Sequence[str] | None = None,
+    node_indices: Sequence[int] | None = None,
+    target_frequency: float | None = None,
+    gamma_index: int | None = None,
+    title: str = "Photonic Band Structure Comparison: Air vs SiO₂ Substrate Cladding",
+    output_path: Path | str | None = None,
+    air_title: str = "(a) Symmetric Membrane (Air Cladding, TE-like)",
+    substrate_title: str = "(b) Asymmetric Slab (SiO₂ Substrate, All Modes)",
+    share_ylim: bool = True,
+    max_freq_crop: float | None = None,
+) -> plt.Figure:
+    """Plots a side-by-side band diagram comparison between symmetric air-clad membrane and asymmetric substrate-clad slab.
+
+    - Panel (a): Air cladding (z-mirror symmetry, TE-like parity modes, air light line).
+    - Panel (b): SiO2 substrate cladding (broken vertical symmetry, all modes, SiO2 light line).
+
+    Visualizes computed eigenfrequencies as discrete dots without artificial continuity
+    interpolation, displays omnidirectional band gaps, and plots the light line and light cone.
+    If target_frequency is provided, draws a horizontal dashed reference line across both panels
+    and marks the target Dirac frequency at the Gamma point.
+
+    Args:
+        results_air: Solver results dictionary from the air-clad membrane simulation.
+        results_substrate: Solver results dictionary from the substrate-clad simulation.
+        node_labels: Sequence of high-symmetry k-point labels (e.g. ['X', 'Γ', 'M', 'X']).
+        node_indices: Sequence of k-point indices for the high-symmetry vertices.
+        target_frequency: Optional normalized Dirac frequency omega_D to highlight.
+        gamma_index: Optional index of the Gamma point along the k-path. If None, automatically
+            detected from node_labels.
+        title: Overall super-title for the comparison figure.
+        output_path: Optional path to save the generated figure.
+        air_title: Subplot title for panel (a).
+        substrate_title: Subplot title for panel (b).
+        share_ylim: Whether to force both subplots to have identical frequency y-limits.
+        max_freq_crop: Optional maximum frequency ceiling for y-axis limits.
+
+    Returns:
+        Matplotlib Figure object containing the 2-panel band structure comparison.
+
+    Raises:
+        ValueError: If results dictionaries do not contain frequency arrays.
+    """
+    from phc_mpb.plotting import plot_band_structure
+
+    labels_list = list(node_labels) if node_labels is not None else None
+    indices_list = [int(i) for i in node_indices] if node_indices is not None else None
+
+    # Detect Gamma index if not explicitly provided
+    if gamma_index is None and labels_list is not None and indices_list is not None:
+        for lbl, idx in zip(labels_list, indices_list, strict=False):
+            if lbl in ("Γ", "Gamma", "G"):
+                gamma_index = idx
+                break
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14.2, 5.5), dpi=150)
+    fig.subplots_adjust(top=0.88, bottom=0.12, wspace=0.28)
+
+    # Panel (a): Air-clad symmetric membrane
+    plot_band_structure(
+        results=results_air,
+        node_labels=labels_list,
+        node_indices=indices_list,
+        title=air_title,
+        ax=ax1,
+        plot_gaps=True,
+    )
+
+    # Panel (b): Substrate-clad asymmetric slab
+    plot_band_structure(
+        results=results_substrate,
+        node_labels=labels_list,
+        node_indices=indices_list,
+        title=substrate_title,
+        ax=ax2,
+        plot_gaps=False,
+    )
+
+    # Determine uniform y-limit if requested
+    if share_ylim:
+        freqs_air = results_air.get("freqs", {})
+        max_f_air = 0.5
+        for arr in freqs_air.values():
+            if len(arr) > 0:
+                max_f_air = max(max_f_air, float(np.nanmax(arr)))
+
+        freqs_sub = results_substrate.get("freqs", {})
+        max_f_sub = 0.5
+        for arr in freqs_sub.values():
+            if len(arr) > 0:
+                max_f_sub = max(max_f_sub, float(np.nanmax(arr)))
+
+        # Top limit based on air modes (to zoom in on the physical range of interest)
+        if max_freq_crop is not None:
+            y_top = float(max_freq_crop)
+        else:
+            y_top = 1.15 * max_f_air
+
+        ax1.set_ylim(bottom=0.0, top=y_top)
+        ax2.set_ylim(bottom=0.0, top=y_top)
+
+    # Highlight target frequency if provided
+    if target_frequency is not None:
+        f_target = float(target_frequency)
+        for ax in (ax1, ax2):
+            ax.axhline(
+                f_target,
+                color="#D9534F",
+                linestyle="--",
+                linewidth=1.5,
+                alpha=0.85,
+                label=rf"Target $\tilde{{\omega}}_D = {f_target:.4f}$",
+                zorder=4,
+            )
+            if gamma_index is not None:
+                ax.scatter(
+                    gamma_index,
+                    f_target,
+                    marker="*",
+                    s=220,
+                    facecolor="#FFD700",
+                    edgecolor="#8B0000",
+                    linewidth=1.4,
+                    zorder=7,
+                    label="Dirac Crossing",
+                )
+            # Re-generate legend with updated handles
+            handles, leg_labels = ax.get_legend_handles_labels()
+            # Deduplicate labels while preserving order
+            by_label = dict(zip(leg_labels, handles, strict=False))
+            ax.legend(
+                by_label.values(),
+                by_label.keys(),
+                loc="upper right",
+                framealpha=0.9,
+                fontsize=8.5,
+            )
+
+    fig.suptitle(title, fontsize=12.5, fontweight="bold", y=0.98)
+
+    if output_path is not None:
+        p = Path(output_path).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(p, bbox_inches="tight")
+
+    return fig

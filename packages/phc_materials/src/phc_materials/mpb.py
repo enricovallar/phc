@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 
 from phc_materials.models import (
@@ -7,18 +9,21 @@ from phc_materials.models import (
 )
 
 
-def to_mpb_medium(material: MaterialSpec | str):
-    """Converts a MaterialSpec or material key into a meep.Medium object.
+def to_mpb_medium(material: MaterialSpec | str | float | Any):
+    """Converts a MaterialSpec, material key, or numeric index into a meep.Medium object.
 
     Handles both isotropic (scalar index) and anisotropic (epsilon_diag
     tensor + rotation) materials.
     """
+    import meep as mp
+
     if isinstance(material, str):
         from phc_materials.registry import get_material
 
         material = get_material(material)
 
-    import meep as mp
+    if isinstance(material, (int, float)):
+        return mp.Medium(index=float(material))
 
     if isinstance(material, IsotropicMaterial):
         return mp.Medium(index=material.index)
@@ -31,5 +36,8 @@ def to_mpb_medium(material: MaterialSpec | str):
                 mp.Vector3(0, 0, 1), np.deg2rad(material.rotation_deg)
             )
         return medium
+
+    if isinstance(material, mp.Medium):
+        return material
 
     raise TypeError(f"Unsupported material spec type: {type(material)}")

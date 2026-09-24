@@ -59,12 +59,12 @@ def gds_to_mpb_geometry(
     pitch: float = 1.0,
     dimension: Literal["2D", "3D_slab"] = "2D",
     slab_thickness: float = 0.22,
-    slab_material: str | None = None,
-    substrate_material: str | None = None,
+    slab_material: str | float | Any | None = None,
+    substrate_material: str | float | Any | None = None,
     substrate_thickness: float | None = None,
     z_center: float = 0.0,
     etch_layer: tuple[int, int] = (1, 0),
-    etch_material: str = "air",
+    etch_material: str | float | Any = "air",
     geometry_lattice: Any = None,
 ) -> list[Any]:
     """Converts GDS polygons on the etch layer into a list of MPB Prisms or Cylinders.
@@ -78,10 +78,10 @@ def gds_to_mpb_geometry(
         pitch: Lattice constant a in microns (used for normalization).
         dimension: "2D" (infinite along z) or "3D_slab" (finite thickness).
         slab_thickness: Thickness of slab in microns (used when dimension='3D_slab').
-        slab_material: Optional material key for the dielectric slab core (e.g. "si").
+        slab_material: Optional material key or numeric index for the dielectric slab core (e.g. "si" or 3.48).
             If specified and dimension='3D_slab', an mp.Block covering the unit cell
             with height slab_thickness / pitch is prepended before the etch holes.
-        substrate_material: Optional material key for the bottom substrate cladding (e.g. "sio2").
+        substrate_material: Optional material key or numeric index for the bottom substrate cladding (e.g. "sio2" or 1.44).
             If specified and dimension='3D_slab', an mp.Block is placed below the slab.
         substrate_thickness: Optional thickness of the substrate in microns. If None, fills
             the lower half of the computational cell down to the supercell lower boundary.

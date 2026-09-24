@@ -5,13 +5,15 @@ from pathlib import Path
 import numpy as np
 from phc_optimization.locus import (
     compute_curve_normals,
+    evaluate_locus_dirac_frequencies,
     evaluate_locus_group_velocities,
     export_locus_to_csv,
     extract_optimal_loci,
     extract_polar_ring_locus,
+    find_target_locus_point,
     refine_locus_points,
 )
-from phc_optimization.plotting import plot_locus_profile
+from phc_optimization.plotting import plot_locus_dirac_frequency, plot_locus_profile
 
 
 def test_compute_curve_normals_line():
@@ -235,7 +237,7 @@ def test_bayesian_optimizer_analyze_locus_runs(tmp_path: Path):
     opt = BayesianOptimizer(
         cell_factory=mock_cell,
         parameters={"r1": (0.22, 0.32), "r2": (0.20, 0.30)},
-        fixed_parameters={"pitch": 1.0},
+        fixed_parameters={"pitch": 1.0, "supercell_z": 4.0, "slab_thickness": 0.5},
         objective="dirac_degeneracy",
         objective_kwargs={
             "symmetry_group": "C4v",
@@ -257,3 +259,269 @@ def test_bayesian_optimizer_analyze_locus_runs(tmp_path: Path):
     # Call analyze_locus and ensure no TypeError is raised
     res = opt.analyze_locus(sample_points=5, max_refine_steps=2)
     assert isinstance(res, list)
+
+
+def test_evaluate_locus_dirac_frequencies():
+    """Verifies that evaluate_locus_dirac_frequencies computes and populates Dirac frequencies."""
+    locus = {
+        "locus_id": 1,
+        "x1": [0.25, 0.28, 0.30],
+        "x2": [0.20, 0.22, 0.24],
+        "p1_name": "r1",
+        "p2_name": "r2",
+    }
+
+    def mock_freq_fn(params: dict[str, float]) -> float:
+        # Mock linear dispersion with parameters
+        return 0.30 + 0.2 * params["r1"] + 0.1 * params["r2"]
+
+    updated = evaluate_locus_dirac_frequencies(
+        locus=locus,
+        param_names=["r1", "r2"],
+        compute_freq_fn=mock_freq_fn,
+    )
+    assert "dirac_frequency" in updated
+    assert len(updated["dirac_frequency"]) == 3
+    assert updated["dirac_frequency"][0] == 0.30 + 0.2 * 0.25 + 0.1 * 0.20
+    assert "omega_d" in updated
+    assert updated["omega_d"] == updated["dirac_frequency"]
+
+
+def test_plot_locus_dirac_frequency(tmp_path: Path):
+    """Verifies that plot_locus_dirac_frequency generates a 2-panel figure with target highlighting."""
+    n_pts = 10
+    x1_vals = np.linspace(0.20, 0.30, n_pts)
+    x2_vals = np.linspace(0.15, 0.25, n_pts)
+    # Frequency monotonically increases from 0.28 to 0.42
+    omega_d_vals = np.linspace(0.28, 0.42, n_pts)
+
+    locus = {
+        "locus_id": 1,
+        "p1_name": "r1",
+        "p2_name": "r2",
+        "x1": list(x1_vals),
+        "x2": list(x2_vals),
+        "dirac_frequency": list(omega_d_vals),
+    }
+
+    target_wavelength = 1.55
+    target_thickness = 0.25
+    slab_thickness = 0.5
+    pitch = 1.0
+
+    fig_path = tmp_path / "test_dirac_freq.png"
+    fig = plot_locus_dirac_frequency(
+        locus=locus,
+        param_names=["r1", "r2"],
+        target_wavelength=target_wavelength,
+        target_thickness=target_thickness,
+        slab_thickness=slab_thickness,
+        pitch=pitch,
+        output_path=fig_path,
+        title="Test Dirac Frequency Plot",
+    )
+
+    assert fig is not None
+    assert fig_path.is_file()
+
+    # Verify 2 subplots exist
+    axes = fig.get_axes()
+    # At least ax1, ax2 (and possibly inset)
+    assert len(axes) >= 2
+    # Verify metadata on locus
+    assert "optimal_match" in locus
+    opt_info = locus["optimal_match"]
+    assert "omega_d" in opt_info
+    assert "pitch" in opt_info
+    assert "thickness" in opt_info
+    assert "frequency_thz" in opt_info
+    assert "thickness_error" in opt_info
+    assert opt_info["target_wavelength"] == target_wavelength
+    assert opt_info["target_thickness"] == target_thickness
+
+    # Ideal omega_d = target_thickness / ( (slab_thickness / pitch) * target_wavelength )
+    expected_ideal = 0.25 / (0.5 * 1.55)
+    np.testing.assert_allclose(opt_info["ideal_omega_d"], expected_ideal, rtol=1e-5)
+
+    # Check closest point was selected
+    errors = [abs(0.5 * w * target_wavelength - target_thickness) for w in omega_d_vals]
+    expected_best_idx = int(np.argmin(errors))
+    assert opt_info["index"] == expected_best_idx
+
+
+def test_refine_locus_points_records_frequencies():
+    """Verifies that refine_locus_points captures Dirac frequencies when evaluate_point_fn returns 3 elements."""
+    locus = {
+        "locus_id": 1,
+        "x1": [0.25, 0.28],
+        "x2": [0.20, 0.22],
+        "fom": [10.0, 10.0],
+        "is_closed": False,
+    }
+
+    def mock_eval_3tuple(params: dict[str, float]) -> tuple[float, float, float]:
+        gap = abs(params["r1"] - 0.25)
+        cost = gap
+        freq = 0.35 + 0.1 * params["r1"]
+        return gap, cost, freq
+
+    refined = refine_locus_points(
+        locus=locus,
+        param_names=["r1", "r2"],
+        evaluate_point_fn=mock_eval_3tuple,
+        tolerance=1e-5,
+        max_steps=4,
+        exclude_unrefined=False,
+    )
+
+    assert "dirac_frequency" in refined
+    assert len(refined["dirac_frequency"]) == 2
+    assert "omega_d" in refined
+    assert refined["dirac_frequency"][0] > 0.0
+
+
+def test_find_target_locus_point():
+    """Verifies that find_target_locus_point correctly identifies closest points for target thickness and target frequency."""
+    locus = {
+        "locus_id": 1,
+        "p1_name": "r1",
+        "p2_name": "r2",
+        "x1": [0.20, 0.25, 0.30],
+        "x2": [0.15, 0.20, 0.25],
+        "dirac_frequency": [0.35, 0.40, 0.45],
+    }
+
+    # Case 1: Target frequency
+    idx, match = find_target_locus_point(
+        locus=locus,
+        target_frequency=0.402,
+        pitch=1.0,
+        slab_thickness=0.5,
+    )
+    assert idx == 1
+    assert match["point_idx"] == 2
+    assert match["omega_d"] == 0.40
+    assert match["ideal_omega_d"] == 0.402
+    assert match["r1"] == 0.25
+    assert match["r2"] == 0.20
+
+    # Case 2: Target wavelength and thickness
+    # eta = 0.5 / 1.0 = 0.5
+    # h = eta * omega_d * lambda = 0.5 * omega_d * 1.55
+    # For omega_d = 0.35 -> h = 0.27125
+    # For omega_d = 0.40 -> h = 0.310
+    # For omega_d = 0.45 -> h = 0.34875
+    # Target thickness = 0.31 -> closest is index 1
+    idx2, match2 = find_target_locus_point(
+        locus=locus,
+        target_wavelength=1.55,
+        target_thickness=0.31,
+        pitch=1.0,
+        slab_thickness=0.5,
+    )
+    assert idx2 == 1
+    assert match2["point_idx"] == 2
+    assert abs(match2["thickness"] - 0.31) < 1e-4
+
+
+def test_load_loci_from_json_and_csv(tmp_path: Path):
+    """Verifies saving and re-loading loci from JSON and CSV formats."""
+    from phc_optimization.locus import (
+        export_loci_to_json,
+        export_locus_to_csv,
+        load_loci_from_json,
+        load_locus_from_csv,
+    )
+
+    locus = {
+        "locus_id": 1,
+        "p1_name": "r1",
+        "p2_name": "r2",
+        "x1": [0.22, 0.28],
+        "x2": [0.18, 0.24],
+        "dirac_frequency": [0.38, 0.42],
+        "group_velocity": [0.15, 0.18],
+        "residual_gap": [1e-6, 2e-6],
+        "fom": [95.0, 98.0],
+        "is_valid": [True, True],
+    }
+
+    # Test JSON export and load
+    json_path = tmp_path / "optimal_loci.json"
+    export_loci_to_json([locus], json_path)
+    assert json_path.is_file()
+
+    # Load from direct file
+    loaded_from_file = load_loci_from_json(json_path)
+    assert len(loaded_from_file) == 1
+    assert loaded_from_file[0]["x1"] == locus["x1"]
+    assert loaded_from_file[0]["dirac_frequency"] == locus["dirac_frequency"]
+
+    # Load from directory
+    loaded_from_dir = load_loci_from_json(tmp_path)
+    assert len(loaded_from_dir) == 1
+    assert loaded_from_dir[0]["x2"] == locus["x2"]
+
+    # Test CSV export and load
+    csv_path = tmp_path / "locus_points.csv"
+    export_locus_to_csv(locus, csv_path, param_names=["r1", "r2"])
+    assert csv_path.is_file()
+
+    loaded_csv = load_locus_from_csv(csv_path)
+    assert loaded_csv["p1_name"] == "r1"
+    assert loaded_csv["p2_name"] == "r2"
+    np.testing.assert_allclose(loaded_csv["x1"], locus["x1"])
+    np.testing.assert_allclose(loaded_csv["dirac_frequency"], locus["dirac_frequency"])
+    np.testing.assert_allclose(loaded_csv["group_velocity"], locus["group_velocity"])
+
+
+def test_find_target_locus_point_nanometers():
+    """Verifies that find_target_locus_point correctly converts nanometer inputs and returns nm metadata."""
+    locus = {
+        "locus_id": 1,
+        "p1_name": "r1",
+        "p2_name": "r2",
+        "x1": [0.20, 0.25, 0.30],
+        "x2": [0.15, 0.20, 0.25],
+        "dirac_frequency": [0.35, 0.40, 0.45],
+    }
+
+    idx, match = find_target_locus_point(
+        locus=locus,
+        target_wavelength_nm=1550.0,
+        target_thickness_nm=310.0,
+        pitch=1.0,
+        slab_thickness=0.5,
+    )
+    assert idx == 1
+    assert match["target_wavelength"] == 1.55
+    assert match["target_wavelength_nm"] == 1550.0
+    assert match["target_thickness"] == 0.31
+    assert match["target_thickness_nm"] == 310.0
+    assert abs(match["thickness_nm"] - 310.0) < 0.1
+    assert "pitch_nm" in match
+
+
+def test_find_latest_locus_path(tmp_path: Path):
+    """Verifies finding the newest optimal_loci.json in a directory tree."""
+    import time
+
+    from phc_optimization.locus import find_latest_locus_path, load_loci_from_json
+
+    dir1 = tmp_path / "run_old"
+    dir2 = tmp_path / "run_new"
+    dir1.mkdir()
+    dir2.mkdir()
+
+    f1 = dir1 / "optimal_loci.json"
+    f2 = dir2 / "optimal_loci.json"
+    f1.write_text('[{"locus_id": 1, "x1": [0.2], "x2": [0.2]}]', encoding="utf-8")
+    time.sleep(0.05)
+    f2.write_text('[{"locus_id": 2, "x1": [0.3], "x2": [0.3]}]', encoding="utf-8")
+
+    latest_path = find_latest_locus_path(base_dir=tmp_path)
+    assert latest_path == f2.resolve()
+
+    # Test load_loci_from_json with 'latest'
+    loaded = load_loci_from_json(path=None, geometry=None)
+    assert isinstance(loaded, list)

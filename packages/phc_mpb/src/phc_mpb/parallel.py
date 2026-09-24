@@ -58,6 +58,8 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
     ) = task_args
     compute_fractions = rest[0] if rest else False
     polarization_method = rest[1] if len(rest) > 1 else "midplane"
+    slab_thickness = rest[2] if len(rest) > 2 else None
+    z_center = rest[3] if len(rest) > 3 else 0.0
 
     from meep import mpb
 
@@ -88,7 +90,12 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
     def _metrics_callback(solver: Any) -> None:
         from phc_mpb.classification import compute_modal_metrics
 
-        metrics = compute_modal_metrics(solver, polarization_method=polarization_method)
+        metrics = compute_modal_metrics(
+            solver,
+            polarization_method=polarization_method,
+            slab_thickness=slab_thickness,
+            z_center=z_center,
+        )
         if isinstance(metrics, list):
             te_fracs_chunk.append([m["te"] for m in metrics])
             confinements_chunk.append([m["confinement"] for m in metrics])
@@ -155,6 +162,8 @@ def run_parallel_band_solver(
     polarization_method: Literal[
         "midplane", "volumetric", "slab", "magnetic"
     ] = "midplane",
+    slab_thickness: float | None = None,
+    z_center: float = 0.0,
 ) -> dict[str, Any]:
     """Executes MPB band structure calculations in parallel across k-points using multiple worker processes.
 
@@ -182,6 +191,12 @@ def run_parallel_band_solver(
         cladding_index: Refractive index of background cladding for light line (dimension='3D_slab').
         tolerance: Conjugate-gradient solver convergence tolerance (default: 1e-7).
         verbose: If True, worker processes stream MPB iteration output to stdout.
+        compute_polarization_fractions: Whether to compute modal TE/TM energy fractions.
+        polarization_method: Polarization fraction calculation method ('midplane', 'volumetric', 'slab', or 'magnetic').
+        slab_thickness: Optional normalized slab thickness in units of lattice constant a.
+            When provided, restricts field integration along z to the dielectric slab core
+            (|z - z_center| <= slab_thickness / 2), preventing dilution from substrate cladding.
+        z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
 
     Returns:
         Dictionary containing:
@@ -295,6 +310,8 @@ def run_parallel_band_solver(
             verbose,
             compute_polarization_fractions,
             polarization_method,
+            slab_thickness,
+            z_center,
         )
         for idx, chunk in enumerate(chunks)
     ]

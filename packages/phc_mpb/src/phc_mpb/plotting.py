@@ -22,8 +22,8 @@ DEFAULT_POLARIZATION_MARKERSIZES: dict[str, float] = {
     "tm": 3.0,
     "tm_like": 3.0,
     "odd": 3.0,
-    "all": 6.5,
-    "no_parity": 6.5,
+    "all": 4.2,
+    "no_parity": 4.2,
 }
 
 DEFAULT_POLARIZATION_COLORS: dict[str, str] = {
@@ -68,7 +68,7 @@ def plot_band_structure(
     plot_gaps: bool = True,
     alpha: float | dict[str, float] = 1.0,
     hollow_fractions: bool = True,
-    edge_linewidth: float = 1.6,
+    edge_linewidth: float = 1.0,
     filter_artifacts: bool = False,
     min_confinement: float = 0.20,
     fade_transitional: bool = True,
@@ -275,7 +275,7 @@ def plot_band_structure(
                     cmap=cmap,
                     vmin=0.0,
                     vmax=1.0,
-                    s=msize**2 * 4,
+                    s=msize**2,
                     marker=pol_marker,
                     zorder=2,
                     alpha=pol_alpha,

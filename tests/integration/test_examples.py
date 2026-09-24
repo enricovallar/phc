@@ -31,6 +31,28 @@ def test_hex_2d_mpb_pipeline_smoke(tmp_path: Path):
 
 
 @pytest.mark.integration
+def test_slab_3d_pipeline_smoke(tmp_path: Path):
+    """End-to-end smoke test verifying simple 3D PhC slab pipeline execution."""
+    from examples.demo_slab_3d import run_slab_3d_pipeline
+
+    out = run_slab_3d_pipeline(quick=True, output_dir=tmp_path, verbose=False)
+
+    assert "results" in out
+    assert "freqs" in out["results"]
+    assert "te_like" in out["results"]["freqs"]
+    assert "light_line" in out["results"]
+
+    freqs = out["results"]["freqs"]["te_like"]
+    assert freqs.shape[0] > 0
+    assert freqs.shape[1] == 4
+
+    assert (tmp_path / "unit_cell.gds").is_file()
+    assert (tmp_path / "band_structure.png").is_file()
+    assert (tmp_path / "epsilon_map.png").is_file()
+    assert (tmp_path / "simulation_results.json").is_file()
+
+
+@pytest.mark.integration
 def test_unit_cell_plot_pipeline_smoke(tmp_path: Path):
     """End-to-end smoke test verifying unit cell layout generation and .plot() pipeline."""
     from examples.plot_unit_cells import run_unit_cell_plot_pipeline
@@ -242,3 +264,61 @@ def test_demo_optimization_3d_smoke(tmp_path: Path):
     assert (tmp_path / "bo_evaluations.log").is_file()
     assert (tmp_path / "bo_evaluations.jsonl").is_file()
     assert (tmp_path / "bo_evaluations.json").is_file()
+
+
+@pytest.mark.integration
+def test_demo_slab_3d_cladding_sweep_smoke(tmp_path: Path):
+    """End-to-end smoke test verifying 3D PhC slab cladding refractive index sweep and mode tracking."""
+    from examples.demo_slab_3d_cladding_sweep_mpb import run_cladding_sweep_pipeline
+
+    out = run_cladding_sweep_pipeline(
+        quick=True,
+        output_dir=tmp_path,
+        verbose=False,
+    )
+
+    # 1. Assert result payload structure
+    assert "n_clad_values" in out
+    assert "baseline_te_freqs" in out
+    assert "baseline_tm_freqs" in out
+    assert "freqs" in out
+    assert "te_fractions" in out
+    assert "geometry" in out
+    assert "artifacts" in out
+
+    n_clad = out["n_clad_values"]
+    assert len(n_clad) == 3
+
+    baseline_te = out["baseline_te_freqs"]
+    assert len(baseline_te) == 10
+
+    baseline_tm = out["baseline_tm_freqs"]
+    assert len(baseline_tm) == 10
+
+    freqs = out["freqs"]
+    assert freqs.shape == (3, 20)
+
+    te_fractions = out["te_fractions"]
+    assert te_fractions.shape == (3, 20)
+    assert te_fractions.min() >= 0.0
+    assert te_fractions.max() <= 1.0
+
+    # 2. Assert canonical, epsilon, and band structure artifacts
+    assert (tmp_path / "unit_cell.gds").is_file()
+    assert (tmp_path / "cladding_sweep.png").is_file()
+    assert (tmp_path / "band_structure_baseline_reference.png").is_file()
+    assert (tmp_path / "band_structure_overlapped_with_reference.png").is_file()
+    assert (tmp_path / "band_structure.png").is_file()
+    assert (tmp_path / "epsilon_map.png").is_file()
+    assert (tmp_path / "epsilon_vertical_profiles_comparison.png").is_file()
+    assert (tmp_path / "simulation_results.json").is_file()
+
+    assert "epsilon_plots" in out
+    assert len(out["epsilon_plots"]) == 3
+    for p_str in out["epsilon_plots"]:
+        assert Path(p_str).is_file()
+
+    assert "band_plots" in out
+    assert len(out["band_plots"]) == 3
+    for p_str in out["band_plots"]:
+        assert Path(p_str).is_file()

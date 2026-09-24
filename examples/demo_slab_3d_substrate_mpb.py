@@ -220,6 +220,8 @@ def run_slab_3d_substrate_pipeline(
         cladding_index=mat_sub.index,
         verbose=False,
         compute_polarization_fractions=True,
+        slab_thickness=slab_thickness_um / pitch,
+        z_center=0.0,
     )
     t_solve_end = time.time()
     solve_duration = t_solve_end - t_solve_start

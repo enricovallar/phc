@@ -240,4 +240,28 @@ python examples/demo_slab_3d_mode_parity_te_fraction_mpb.py --marker-te o --mark
 - **`unit_cell.gds`**: Physical GDS layout mask.
 - **`simulation_results.json`**: Structured JSON summary report.
 
+---
+
+## 10. Simple 3D Photonic Crystal Slab Simulation (`demo_slab_3d.py`)
+
+A streamlined, end-to-end 3D slab simulation matching the exact slab configuration and default parameters from the 3D optimization pipeline ($C_{4v}$ InP membrane, $h/a = 0.5$, $r_1 = 0.25$, $r_2 = 0.15$):
+
+```bash
+# Run with default configuration (no arguments required):
+python examples/demo_slab_3d.py
+
+# Rapid smoke test (< 2 seconds):
+python examples/demo_slab_3d.py --quick
+
+# Interactive preview with Matplotlib:
+python examples/demo_slab_3d.py --show
+```
+
+### Generated Artifacts:
+- **`band_structure.png`**: Band diagram showing guided TE-like slab modes as discrete dots with the light line and band gaps.
+- **`epsilon_map.png`**: Dual-plane permittivity cross-sections (in-plane $xy$ mid-plane and vertical $xz$ profile).
+- **`unit_cell.gds`**: Physical GDSII layout mask.
+- **`simulation_results.json`**: Complete structured JSON summary.
+
+
 

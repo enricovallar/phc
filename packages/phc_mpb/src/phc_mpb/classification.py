@@ -31,6 +31,8 @@ def compute_polarization_fractions(
     ms: Any,
     band_idx: int | None = None,
     method: Literal["midplane", "volumetric", "slab", "magnetic"] = "midplane",
+    slab_thickness: float | None = None,
+    z_center: float = 0.0,
 ) -> dict[str, float] | list[dict[str, float]]:
     """Calculates the TE and TM electromagnetic energy fractions for eigenmodes at the current k-point.
 
@@ -50,6 +52,10 @@ def compute_polarization_fractions(
     - 'magnetic': Evaluates the magnetic field energy components Hz^2 vs (Hx^2 + Hy^2). Note that
       near Gamma (k_parallel -> 0), Hz -> 0 for normal-incidence waves, so 'midplane' is preferred.
 
+    When `slab_thickness` is provided, field integration is strictly restricted along z to the
+    dielectric slab core (|z - z_center| <= slab_thickness / 2), preventing field dilution from
+    substrate cladding or unguided radiative components in asymmetric slabs.
+
     For 2D simulations, 'midplane' and 'volumetric' are identical.
 
     Args:
@@ -57,6 +63,10 @@ def compute_polarization_fractions(
         band_idx: Optional 1-based band index (1 to num_bands). If specified, calculates
             fractions for this single band. If None, calculates fractions for all solved bands.
         method: Evaluation method ('midplane', 'volumetric', 'slab', or 'magnetic'). Default is 'midplane'.
+        slab_thickness: Optional normalized slab thickness in units of lattice constant a.
+            When provided, restricts field integration to |z - z_center| <= slab_thickness / 2.
+            If None, falls back to unmasked evaluation according to `method`.
+        z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
 
     Returns:
         If band_idx is provided: Dict with keys 'te' and 'tm' (floats in [0.0, 1.0]).
@@ -66,7 +76,13 @@ def compute_polarization_fractions(
         ValueError: If band_idx is outside [1, ms.num_bands] or method is unrecognized.
         RuntimeError: If fields are not available or solver has not run.
     """
-    metrics = compute_modal_metrics(ms, band_idx=band_idx, polarization_method=method)
+    metrics = compute_modal_metrics(
+        ms,
+        band_idx=band_idx,
+        polarization_method=method,
+        slab_thickness=slab_thickness,
+        z_center=z_center,
+    )
     if band_idx is not None and isinstance(metrics, dict):
         return {"te": metrics["te"], "tm": metrics["tm"]}
 
@@ -80,6 +96,8 @@ def compute_slab_confinement(
     ms: Any,
     band_idx: int | None = None,
     min_eps: float = 1.5,
+    slab_thickness: float | None = None,
+    z_center: float = 0.0,
 ) -> float | list[float]:
     """Calculates the fraction of modal electric energy confined within the high-index core slab.
 
@@ -93,6 +111,9 @@ def compute_slab_confinement(
         ms: mpb.ModeSolver instance with solved eigenfields.
         band_idx: Optional 1-based band index (1 to num_bands). If None, computes for all bands.
         min_eps: Permittivity threshold identifying the core slab (default: 1.5).
+        slab_thickness: Optional normalized slab thickness in units of lattice constant a.
+            When provided, restricts the core slab region along z to |z - z_center| <= slab_thickness / 2.
+        z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
 
     Returns:
         Float in [0.0, 1.0] if band_idx is specified, or list of floats for all bands.
@@ -101,7 +122,13 @@ def compute_slab_confinement(
         ValueError: If band_idx is outside valid range.
         RuntimeError: If eigenfields cannot be retrieved.
     """
-    metrics = compute_modal_metrics(ms, band_idx=band_idx, min_eps=min_eps)
+    metrics = compute_modal_metrics(
+        ms,
+        band_idx=band_idx,
+        min_eps=min_eps,
+        slab_thickness=slab_thickness,
+        z_center=z_center,
+    )
     if band_idx is not None and isinstance(metrics, dict):
         return metrics["confinement"]
 
@@ -118,11 +145,17 @@ def compute_modal_metrics(
         "midplane", "volumetric", "slab", "magnetic"
     ] = "midplane",
     min_eps: float = 1.5,
+    slab_thickness: float | None = None,
+    z_center: float = 0.0,
 ) -> dict[str, float] | list[dict[str, float]]:
     """Calculates both TE/TM polarization fractions and slab core energy confinement in a single pass.
 
     Retrieves eigenfields once per band, evaluating modal polarization and core confinement
     simultaneously to avoid redundant field queries and memory allocations.
+
+    When `slab_thickness` is provided, field integration is strictly restricted along z to the
+    dielectric slab core (|z - z_center| <= slab_thickness / 2), preventing field dilution from
+    substrate cladding or unguided radiative components in asymmetric slabs.
 
     Args:
         ms: mpb.ModeSolver instance with solved eigenfields at the current k-point.
@@ -130,6 +163,10 @@ def compute_modal_metrics(
         polarization_method: Method for polarization fraction calculation
             ('midplane', 'volumetric', 'slab', or 'magnetic'). Default is 'midplane'.
         min_eps: Permittivity threshold defining the core slab region (default: 1.5).
+        slab_thickness: Optional normalized slab thickness in units of lattice constant a.
+            When provided, restricts the z-domain: |z - z_center| <= slab_thickness / 2.
+            If None, falls back to unmasked evaluation according to `polarization_method`.
+        z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
 
     Returns:
         If band_idx is provided: Dict with keys 'te', 'tm', and 'confinement' (floats in [0.0, 1.0]).
@@ -164,13 +201,34 @@ def compute_modal_metrics(
         u_pt = np.real(np.conj(efield) * dfield).sum(axis=-1)
         u_cell = float(u_pt.sum())
 
+        nz = efield.shape[2] if efield.ndim >= 3 else 1
+        has_core_mask = slab_thickness is not None and nz > 1
+        z_mask = None
+        if has_core_mask:
+            assert slab_thickness is not None
+            sz = 1.0
+            if hasattr(ms, "geometry_lattice") and hasattr(ms.geometry_lattice, "size"):
+                lat_sz = getattr(ms.geometry_lattice.size, "z", 0.0)
+                if lat_sz > 0:
+                    sz = float(lat_sz)
+            z_coords = (np.arange(nz) / nz - 0.5) * sz
+            z_mask = np.abs(z_coords - z_center) <= (0.5 * slab_thickness + 1e-9 * sz)
+            if not np.any(z_mask):
+                z_mask[int(np.argmin(np.abs(z_coords - z_center)))] = True
+
         try:
             eps = ms.get_epsilon()
-            in_slab = eps > min_eps
+            if has_core_mask and z_mask is not None:
+                in_slab = (eps > min_eps) & z_mask[np.newaxis, np.newaxis, :]
+            else:
+                in_slab = eps > min_eps
             u_slab = float(u_pt[in_slab].sum())
         except (AttributeError, RuntimeError, ValueError):
-            # Fallback if epsilon cannot be retrieved
-            u_slab = u_cell
+            eps = None
+            if has_core_mask and z_mask is not None:
+                u_slab = float(u_pt[:, :, z_mask].sum())
+            else:
+                u_slab = u_cell
 
         confinement = float(np.clip(u_slab / u_cell, 0.0, 1.0)) if u_cell > 0 else 0.0
 
@@ -180,37 +238,57 @@ def compute_modal_metrics(
                 hfield = ms.get_hfield(b)
             except (AttributeError, RuntimeError, TypeError) as exc:
                 raise RuntimeError(f"Failed to retrieve H-field for band {b}.") from exc
-            u_hxy = float(
-                np.sum(np.abs(hfield[..., 0]) ** 2 + np.abs(hfield[..., 1]) ** 2)
-            )
-            u_hz = float(np.sum(np.abs(hfield[..., 2]) ** 2))
+            if has_core_mask and z_mask is not None:
+                hf = hfield[:, :, z_mask, :]
+            else:
+                hf = hfield
+            u_hxy = float(np.sum(np.abs(hf[..., 0]) ** 2 + np.abs(hf[..., 1]) ** 2))
+            u_hz = float(np.sum(np.abs(hf[..., 2]) ** 2))
             u_tot_h = u_hxy + u_hz
             f_te = float(np.clip(u_hz / u_tot_h, 0.0, 1.0)) if u_tot_h > 0 else 0.5
             return {"te": f_te, "tm": 1.0 - f_te, "confinement": confinement}
 
-        nz = efield.shape[2] if efield.ndim >= 3 else 1
-        if polarization_method == "midplane" and nz > 1:
-            mid = nz // 2
-            ef = efield[:, :, mid : mid + 1, :]
-            df = dfield[:, :, mid : mid + 1, :]
-        elif polarization_method == "slab" and nz > 1:
-            ef = efield[in_slab, :]
-            df = dfield[in_slab, :]
+        if has_core_mask and z_mask is not None:
+            ef_core = efield[:, :, z_mask, :]
+            if eps is not None:
+                eps_core = eps[:, :, z_mask]
+                u_inplane = float(
+                    np.sum(
+                        eps_core
+                        * (np.abs(ef_core[..., 0]) ** 2 + np.abs(ef_core[..., 1]) ** 2)
+                    )
+                )
+                u_z = float(np.sum(eps_core * (np.abs(ef_core[..., 2]) ** 2)))
+            else:
+                df_core = dfield[:, :, z_mask, :]
+                u_x = float(np.real(np.conj(ef_core[..., 0]) * df_core[..., 0]).sum())
+                u_y = float(np.real(np.conj(ef_core[..., 1]) * df_core[..., 1]).sum())
+                u_z = float(np.real(np.conj(ef_core[..., 2]) * df_core[..., 2]).sum())
+                u_inplane = u_x + u_y
+            u_tot_e = u_inplane + u_z
         else:
-            ef = efield
-            df = dfield
+            if polarization_method == "midplane" and nz > 1:
+                mid = nz // 2
+                ef = efield[:, :, mid : mid + 1, :]
+                df = dfield[:, :, mid : mid + 1, :]
+            elif polarization_method == "slab" and nz > 1 and eps is not None:
+                ef = efield[in_slab, :]
+                df = dfield[in_slab, :]
+            else:
+                ef = efield
+                df = dfield
 
-        u_x = float(np.real(np.conj(ef[..., 0]) * df[..., 0]).sum())
-        u_y = float(np.real(np.conj(ef[..., 1]) * df[..., 1]).sum())
-        u_z = float(np.real(np.conj(ef[..., 2]) * df[..., 2]).sum())
-        u_te = u_x + u_y
-        u_tot_e = u_te + u_z
+            u_x = float(np.real(np.conj(ef[..., 0]) * df[..., 0]).sum())
+            u_y = float(np.real(np.conj(ef[..., 1]) * df[..., 1]).sum())
+            u_z = float(np.real(np.conj(ef[..., 2]) * df[..., 2]).sum())
+            u_inplane = u_x + u_y
+            u_tot_e = u_inplane + u_z
 
-        if u_tot_e <= 0:
+        if u_tot_e <= 0 or not np.isfinite(u_tot_e):
             f_te = 0.5
             f_tm = 0.5
         else:
-            f_te = float(np.clip(u_te / u_tot_e, 0.0, 1.0))
+            f_te = float(np.clip(u_inplane / u_tot_e, 0.0, 1.0))
             f_tm = float(np.clip(u_z / u_tot_e, 0.0, 1.0))
 
         return {"te": f_te, "tm": f_tm, "confinement": confinement}

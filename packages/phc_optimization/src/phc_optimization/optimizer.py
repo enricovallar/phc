@@ -36,18 +36,22 @@ from phc_utils import export_gds, silence_c_stdout
 from skopt import Optimizer
 from skopt.space import Integer, Real
 
+from phc_optimization.analysis import run_substrate_band_comparison
 from phc_optimization.connectivity import check_slab_connectivity
 from phc_optimization.locus import (
+    evaluate_locus_dirac_frequencies,
     evaluate_locus_group_velocities,
     export_loci_to_json,
     export_locus_to_csv,
     extract_optimal_loci,
+    find_target_locus_point,
     refine_locus_points,
 )
 from phc_optimization.objectives import BaseObjective, get_objective
 from phc_optimization.plotting import (
     plot_bo_convergence,
     plot_bo_surrogate_map,
+    plot_locus_dirac_frequency,
     plot_locus_profile,
 )
 from phc_optimization.surrogate import predict_surrogate_landscape
@@ -157,6 +161,33 @@ def _extract_solver_data(
     return data
 
 
+def _instantiate_cell_component(
+    cell_factory: Callable[..., gf.Component],
+    params: dict[str, Any],
+) -> gf.Component:
+    """Instantiates a unit cell component by filtering parameters to the cell_factory signature.
+
+    Args:
+        cell_factory: Factory callable producing a GDSFactory Component.
+        params: Dictionary of parameters to pass to the cell factory.
+
+    Returns:
+        The instantiated GDSFactory Component mask.
+    """
+    try:
+        sig = inspect.signature(cell_factory)
+        has_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if has_var_kw:
+            cell_kwargs = params
+        else:
+            cell_kwargs = {k: v for k, v in params.items() if k in sig.parameters}
+    except (ValueError, TypeError):
+        cell_kwargs = params
+    return cell_factory(**cell_kwargs)
+
+
 def _evaluate_candidate_worker(
     args: tuple[Any, ...],
 ) -> tuple[
@@ -210,20 +241,7 @@ def _evaluate_candidate_worker(
 
     # 1. Generate GDSFactory component (filter kwargs to match cell_factory signature)
     t_geom_0 = time.perf_counter()
-    try:
-        sig = inspect.signature(cell_factory)
-        has_var_kw = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-        )
-        if has_var_kw:
-            cell_kwargs = combined_params
-        else:
-            cell_kwargs = {
-                k: v for k, v in combined_params.items() if k in sig.parameters
-            }
-    except (ValueError, TypeError):
-        cell_kwargs = combined_params
-    component = cell_factory(**cell_kwargs)
+    component = _instantiate_cell_component(cell_factory, combined_params)
     t_geom = time.perf_counter() - t_geom_0
 
     # 2. Setup and run MPB ModeSolver under C-level stdout suppression
@@ -897,20 +915,7 @@ class BayesianOptimizer:
 
         # Export mandatory GDS layout for optimal design
         best_combined = {**self.fixed_params, **best_rec.params}
-        try:
-            sig = inspect.signature(self.cell_factory)
-            has_var_kw = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            )
-            if has_var_kw:
-                cell_kwargs = best_combined
-            else:
-                cell_kwargs = {
-                    k: v for k, v in best_combined.items() if k in sig.parameters
-                }
-        except (ValueError, TypeError):
-            cell_kwargs = best_combined
-        best_component = self.cell_factory(**cell_kwargs)
+        best_component = _instantiate_cell_component(self.cell_factory, best_combined)
         optimal_gds = self.output_dir / "unit_cell.gds"
         export_gds(best_component, optimal_gds, overwrite=True)
 
@@ -1053,18 +1058,7 @@ class BayesianOptimizer:
             params = {**self.fixed_params, **best_params}
 
         # 2. Build GDS layout and MPB geometry
-        try:
-            sig = inspect.signature(self.cell_factory)
-            has_var_kw = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-            )
-            if has_var_kw:
-                cell_kwargs = params
-            else:
-                cell_kwargs = {k: v for k, v in params.items() if k in sig.parameters}
-        except (ValueError, TypeError):
-            cell_kwargs = params
-        component = self.cell_factory(**cell_kwargs)
+        component = _instantiate_cell_component(self.cell_factory, params)
         sz_val = float(params.get("supercell_z", self.supercell_z))
         mpb_lattice = create_lattice(
             lattice_type=self.lattice_type,
@@ -1097,24 +1091,25 @@ class BayesianOptimizer:
             k_density=k_density,
         )
 
-        # 4. Construct MPB ModeSolver initialized along the k-path
-        ms = create_mode_solver(
-            geometry_lattice=mpb_lattice,
-            geometry=mpb_geom,
-            k_points=k_pts,
-            default_material=default_mat,
-            resolution=self.resolution,
-            num_bands=self.num_bands,
-        )
+        with silence_c_stdout():
+            # 4. Construct MPB ModeSolver initialized along the k-path
+            ms = create_mode_solver(
+                geometry_lattice=mpb_lattice,
+                geometry=mpb_geom,
+                k_points=k_pts,
+                default_material=default_mat,
+                resolution=self.resolution,
+                num_bands=self.num_bands,
+            )
 
-        # 5. Extract permittivity grid
-        eps_array = get_epsilon_grid(
-            ms,
-            rectify=rectify,
-            periods=periods,
-            periods_z=1,
-            resolution=grid_resolution,
-        )
+            # 5. Extract permittivity grid
+            eps_array = get_epsilon_grid(
+                ms,
+                rectify=rectify,
+                periods=periods,
+                periods_z=1,
+                resolution=grid_resolution,
+            )
 
         fig_eps = None
         if plot_eps:
@@ -1172,7 +1167,15 @@ class BayesianOptimizer:
         max_residual_gap: float = 1e-4,
         delta_k: float = 0.01,
         sample_points: int = 40,
+        target_wavelength: float = 1.55,
+        target_thickness: float | None = None,
+        target_frequency: float | None = None,
+        target_wavelength_nm: float | None = None,
+        target_thickness_nm: float | None = None,
+        compare_substrate: bool = False,
+        num_bands_substrate: int | None = None,
         plot_profile: bool = True,
+        plot_dirac_freq: bool = True,
         save_artifacts: bool = True,
         verbose: bool = True,
     ) -> list[dict[str, Any]]:
@@ -1182,7 +1185,8 @@ class BayesianOptimizer:
         landscape, extracts continuous 1D degeneracy loci, refines sampled coordinates
         to exact degeneracy using fast Gamma-only 1D secant line searches, computes group
         velocities at an adjacent k-point k = (delta_k, 0, 0), renders a 3-panel locus
-        profile figure, and saves tabular CSV / JSON manifests.
+        profile figure and a 2-panel Dirac frequency figure, and saves tabular CSV / JSON manifests.
+        Optionally executes comparative band structure analysis on a SiO₂ substrate at the target point.
 
         Args:
             max_loci: Maximum number of distinct locus ridges to extract (defaults to 1).
@@ -1194,18 +1198,29 @@ class BayesianOptimizer:
             max_residual_gap: Maximum allowed residual cost for valid refined points.
             delta_k: Offset from Gamma along k_x for Hellmann-Feynman group velocity evaluation (default: 0.01).
             sample_points: Number of points sampled along the smooth locus curve.
+            target_wavelength: Desired operating wavelength in micrometers (default: 1.55).
+            target_thickness: Desired physical slab thickness in micrometers (default: slab_thickness).
+            target_frequency: Optional direct normalized Dirac frequency target override.
+            compare_substrate: If True, computes and renders an Air vs SiO₂ substrate band diagram comparison.
+            num_bands_substrate: Number of eigenbands for the substrate solve (default: 2.5 * num_bands).
             plot_profile: If True, renders and saves a 3-panel locus profile plot.
-            save_artifacts: If True, saves locus_points.csv and optimal_loci.json to disk.
+            plot_dirac_freq: If True, renders and saves a 2-panel Dirac frequency analysis plot.
+            save_artifacts: If True, saves locus_points.csv, locus figures, and optimal_loci.json.
             verbose: Whether to print progress information to stdout.
 
         Returns:
             List of processed locus dictionaries containing refined coordinates,
-            residual gaps, and adjacent-point group velocities.
+            Dirac frequencies, residual gaps, and adjacent-point group velocities.
 
         Raises:
             RuntimeError: If called before any evaluations have been completed.
             ValueError: If the optimization problem does not have exactly 2 search parameters.
         """
+        if target_wavelength_nm is not None:
+            target_wavelength = float(target_wavelength_nm) / 1000.0
+        if target_thickness_nm is not None:
+            target_thickness = float(target_thickness_nm) / 1000.0
+
         if not self.records:
             raise RuntimeError(
                 "No evaluations found. Call opt.run() before analyzing loci."
@@ -1261,7 +1276,7 @@ class BayesianOptimizer:
             pt_params: dict[str, float], k_pt: mp.Vector3
         ) -> tuple[Any, dict[str, Any], gf.Component]:
             combined = {**self.fixed_params, **pt_params}
-            comp = self.cell_factory(**combined)
+            comp = _instantiate_cell_component(self.cell_factory, combined)
             sz_val = float(
                 self.supercell_z
                 if self.supercell_z is not None
@@ -1300,7 +1315,7 @@ class BayesianOptimizer:
 
         def _evaluate_gamma_gap(
             pt_params: dict[str, float],
-        ) -> tuple[float, float]:
+        ) -> tuple[float, float, float]:
             with silence_c_stdout():
                 ms_gamma, combined, comp = _build_mode_solver_at_k(
                     pt_params, mp.Vector3(0, 0, 0)
@@ -1331,10 +1346,22 @@ class BayesianOptimizer:
                         - obj_eval.metadata.get("freq_low", 0.0),
                     )
                 )
-                gap_cost = float(
-                    obj_eval.metadata.get("raw_cost", obj_eval.cost)
+                gap_cost = float(obj_eval.metadata.get("raw_cost", obj_eval.cost))
+                dirac_freq = float(
+                    obj_eval.metadata.get(
+                        "freq_middle",
+                        (
+                            obj_eval.metadata.get("freq_high", 0.0)
+                            + obj_eval.metadata.get("freq_low", 0.0)
+                        )
+                        / 2.0,
+                    )
                 )
-                return signed_gap, gap_cost
+                return signed_gap, gap_cost, dirac_freq
+
+        def _evaluate_gamma_freq(pt_params: dict[str, float]) -> float:
+            _, _, f_dirac = _evaluate_gamma_gap(pt_params)
+            return f_dirac
 
         def _evaluate_adjacent_vg(pt_params: dict[str, float]) -> float:
             with silence_c_stdout():
@@ -1395,6 +1422,15 @@ class BayesianOptimizer:
                     param_bounds=bounds_dict,
                 )
 
+            if not locus.get("dirac_frequency"):
+                if verbose:
+                    print(f"  Evaluating Dirac frequency along Locus #{l_id}...")
+                evaluate_locus_dirac_frequencies(
+                    locus=locus,
+                    param_names=self.param_names,
+                    compute_freq_fn=_evaluate_gamma_freq,
+                )
+
             if verbose:
                 print(
                     f"  Evaluating group velocity at adjacent point delta_k={delta_k}..."
@@ -1425,7 +1461,140 @@ class BayesianOptimizer:
                     if verbose:
                         print(f"  Saved 3-panel locus profile to '{fig_path}'")
 
+                if plot_dirac_freq:
+                    fig_df_path = locus_dir / "locus_dirac_frequency.png"
+                    h_val = float(
+                        self.fixed_params.get(
+                            "slab_thickness",
+                            self.fixed_params.get(
+                                "thickness",
+                                self.fixed_params.get("h", 0.5),
+                            ),
+                        )
+                    )
+                    plot_locus_dirac_frequency(
+                        locus=locus,
+                        param_names=self.param_names,
+                        target_wavelength=target_wavelength,
+                        target_thickness=target_thickness,
+                        target_frequency=target_frequency,
+                        slab_thickness=h_val,
+                        pitch=self.pitch,
+                        output_path=fig_df_path,
+                        title=rf"Degeneracy Locus #{l_id} Dirac Frequency ($\tilde{{\omega}}_D$ vs $s$)",
+                    )
+                    if verbose:
+                        print(
+                            f"  Saved 2-panel Dirac frequency plot to '{fig_df_path}'"
+                        )
+
+                if compare_substrate and self.dimension == "3D_slab":
+                    if verbose:
+                        print(
+                            f"  Running comparative SiO₂ substrate band simulation for Locus #{l_id}..."
+                        )
+                    sub_res = self.compare_substrate_at_target(
+                        locus=locus,
+                        target_wavelength=target_wavelength,
+                        target_thickness=target_thickness,
+                        target_frequency=target_frequency,
+                        num_bands_substrate=num_bands_substrate,
+                        output_dir=locus_dir,
+                        verbose=verbose,
+                    )
+                    locus["substrate_comparison"] = {
+                        "output_path": str(sub_res.get("output_path", "")),
+                        "target_frequency": sub_res.get("target_frequency"),
+                    }
+
         if save_artifacts and loci:
             export_loci_to_json(loci, self.output_dir / "optimal_loci.json")
 
         return loci
+
+    def compare_substrate_at_target(
+        self,
+        locus: dict[str, Any],
+        target_wavelength: float = 1.55,
+        target_thickness: float | None = None,
+        target_frequency: float | None = None,
+        target_wavelength_nm: float | None = None,
+        target_thickness_nm: float | None = None,
+        num_bands_substrate: int | None = None,
+        k_density: int = 12,
+        num_workers: int = 1,
+        output_dir: Path | str | None = None,
+        verbose: bool = True,
+    ) -> dict[str, Any]:
+        """Runs comparative band analysis (Air-clad membrane vs SiO₂ substrate) at the target locus design.
+
+        Args:
+            locus: Locus dictionary containing coordinates and Dirac frequencies.
+            target_wavelength: Target wavelength in micrometers (default: 1.55).
+            target_thickness: Target thickness in micrometers (default: slab_thickness).
+            target_frequency: Optional direct target Dirac frequency override.
+            target_wavelength_nm: Optional target wavelength in nanometers.
+            target_thickness_nm: Optional target thickness in nanometers.
+            num_bands_substrate: Number of bands for substrate solve (default: 2.5 * num_bands).
+            k_density: k-points between high-symmetry vertices (default: 12).
+            num_workers: Parallel workers for band solves (default: 1).
+            output_dir: Directory where comparison figure is saved (defaults to self.output_dir).
+            verbose: Whether to print progress messages.
+
+        Returns:
+            Dictionary containing solver outputs, comparison figure, and file paths.
+        """
+        if target_wavelength_nm is not None:
+            target_wavelength = float(target_wavelength_nm) / 1000.0
+        if target_thickness_nm is not None:
+            target_thickness = float(target_thickness_nm) / 1000.0
+
+        h_val = float(
+            self.fixed_params.get(
+                "slab_thickness",
+                self.fixed_params.get(
+                    "thickness",
+                    self.fixed_params.get("h", 0.5),
+                ),
+            )
+        )
+        _opt_idx, match_meta = find_target_locus_point(
+            locus=locus,
+            target_wavelength=target_wavelength,
+            target_thickness=target_thickness,
+            target_frequency=target_frequency,
+            slab_thickness=h_val,
+            pitch=self.pitch,
+        )
+
+        p1_n = locus.get("p1_name", self.param_names[0])
+        p2_n = locus.get("p2_name", self.param_names[1])
+        target_params = {
+            **self.fixed_params,
+            p1_n: match_meta[p1_n],
+            p2_n: match_meta[p2_n],
+        }
+
+        save_dir = output_dir if output_dir is not None else self.output_dir
+
+        return run_substrate_band_comparison(
+            cell_factory=self.cell_factory,
+            params=target_params,
+            pitch=self.pitch,
+            slab_thickness=h_val,
+            supercell_z=float(
+                self.fixed_params.get("supercell_z", self.supercell_z or 4.0)
+            ),
+            lattice_type=self.lattice_type,
+            matrix_material=self.matrix_material,
+            background_material=self.background_material,
+            substrate_material="sio2",
+            resolution=self.resolution,
+            num_bands=self.num_bands,
+            num_bands_substrate=num_bands_substrate,
+            k_density=k_density,
+            num_workers=num_workers,
+            target_frequency=match_meta["omega_d"],
+            output_dir=save_dir,
+            verbose=verbose,
+        )
