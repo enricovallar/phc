@@ -51,3 +51,10 @@ materials:
     rotation_deg: 0.0
     lumerical_name: "BaTiO3_Custom"
     description: "Barium Titanate thin film"
+
+  hBN:
+    type: anisotropic
+    indices: [2.19, 2.19, 1.61]
+    rotation_deg: 0.0
+    lumerical_name: "hBN"
+    description: "Hexagonal Boron Nitride"

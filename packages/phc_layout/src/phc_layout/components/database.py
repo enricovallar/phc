@@ -146,6 +146,20 @@ UNIT_CELL_DATABASE: dict[str, UnitCellSpec] = {
         features=(FeatureSpec(position="1a", r_over_a=0.40, param=0.15),),
         tags=("snowflake", "optomechanics", "slotted", "painter", "c6v"),
     ),
+
+    "c6v_2b_6d": UnitCellSpec(
+        name="c6v_2b_6d",
+        point_group="C6v",
+        lattice_type="hexagonal",
+        description=(
+            "Aperture in the center"
+        ),
+        features=(
+            FeatureSpec(position="2b", r_over_a=0.15, param=0.15),
+            FeatureSpec(position="6d", r_over_a=0.1, param=0.25),
+        ),
+        tags=("Enrico", "c6v"),
+    ),
     # -------------------------------------------------------------
     # C4v (Square) Family
     # -------------------------------------------------------------

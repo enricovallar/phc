@@ -36,10 +36,10 @@ def create_mode_solver(
     import meep as mp
     from meep import mpb
 
-    if isinstance(default_material, str) or hasattr(default_material, "index"):
-        bg_medium = to_mpb_medium(default_material)
-    elif isinstance(default_material, (int, float)):
+    if isinstance(default_material, (int, float)):
         bg_medium = mp.Medium(index=float(default_material))
+    elif not isinstance(default_material, mp.Medium):
+        bg_medium = to_mpb_medium(default_material)
     else:
         bg_medium = default_material
 

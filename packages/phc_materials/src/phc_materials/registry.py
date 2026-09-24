@@ -61,6 +61,13 @@ DEFAULT_MATERIALS: dict[str, dict[str, Any]] = {
         "lumerical_name": "InP (Indium Phosphide) - Palik",
         "description": "Indium Phosphide at 1550 nm",
     },
+    "hBN": {
+        "type": "anisotropic",
+        "indices": [2.19, 2.19, 1.61],
+        "rotation_deg": 0.0,
+        "lumerical_name": "hBN",
+        "description": "Hexagonal Boron Nitride",
+    },
 }
 
 

@@ -715,7 +715,11 @@ class BayesianOptimizer:
         summary: dict[str, Any] = {
             "run_metadata": {
                 "objective": self.objective.name,
-                "lattice_type": self.lattice_type,
+                "lattice_type": (
+                    self.lattice_type
+                    if isinstance(self.lattice_type, str)
+                    else getattr(self.lattice_type, "__class__", type(self.lattice_type)).__name__
+                ),
                 "pitch": self.pitch,
                 "dimension": self.dimension,
                 "resolution": self.resolution,
@@ -966,7 +970,11 @@ class BayesianOptimizer:
             "best_eval_index": best_rec.eval_index,
             "total_evaluations": len(self.records),
             "objective": self.objective.name,
-            "lattice_type": self.lattice_type,
+            "lattice_type": (
+                self.lattice_type
+                if isinstance(self.lattice_type, str)
+                else getattr(self.lattice_type, "__class__", type(self.lattice_type)).__name__
+            ),
             "pitch": self.pitch,
             "dimension": self.dimension,
             "resolution": self.resolution,
