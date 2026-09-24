@@ -115,5 +115,6 @@ mirror.plot()
 device = gf.Component()
 device << mirror
 device << patch_c6v
-device.plot()
+fig = device.plot(return_fig=True)
+fig.savefig("phc_layout.png")
 device.show()
