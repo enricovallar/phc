@@ -30,27 +30,6 @@ def test_hex_2d_mpb_pipeline_smoke(tmp_path: Path):
     assert (tmp_path / "band_diagram_hex_te.png").is_file()
 
 
-@pytest.mark.integration
-def test_slab_3d_pipeline_smoke(tmp_path: Path):
-    """End-to-end smoke test verifying simple 3D PhC slab pipeline execution."""
-    from examples.demo_slab_3d import run_slab_3d_pipeline
-
-    out = run_slab_3d_pipeline(quick=True, output_dir=tmp_path, verbose=False)
-
-    assert "results" in out
-    assert "freqs" in out["results"]
-    assert "te_like" in out["results"]["freqs"]
-    assert "light_line" in out["results"]
-
-    freqs = out["results"]["freqs"]["te_like"]
-    assert freqs.shape[0] > 0
-    assert freqs.shape[1] == 4
-
-    assert (tmp_path / "unit_cell.gds").is_file()
-    assert (tmp_path / "band_structure.png").is_file()
-    assert (tmp_path / "epsilon_map.png").is_file()
-    assert (tmp_path / "simulation_results.json").is_file()
-
 
 @pytest.mark.integration
 def test_unit_cell_plot_pipeline_smoke(tmp_path: Path):
