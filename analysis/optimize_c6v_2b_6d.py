@@ -3,57 +3,76 @@
 
 Optimizes the geometric parameters of the C6v hexagonal lattice unit cell
 (Wyckoff 2b holes with radius r1 and Wyckoff 6d holes with radius r2 and parameter p2)
-etched in an hBN membrane (or 2D periodic sheet) for accidental Dirac cone degeneracy at Γ:
+etched in an hBN membrane (or 2D periodic sheet / 3D substrate-clad slab) for accidental
+Dirac cone degeneracy at Γ:
 
 1. Defines a parametric C6v hexagonal lattice unit cell with Wyckoff 2b and 6d holes.
-2. Connects to the BayesianOptimizer engine with the DiracDegeneracyObjective.
-3. Automatically enforces physical dielectric continuity and connectivity.
-4. Solves eigenbands at Γ and tracks mode degeneracies (phc_mpb).
-5. Supports scale-invariant formulation (e.g. h/a = 0.1) and physical mapping to target
+2. Connects to the BayesianOptimizer engine with either DiracDegeneracyObjective (irrep-based)
+   or ModalOverlapDegeneracyObjective (tracking 3 modes from an unperturbed reference simulation).
+3. Supports asymmetric cladding substrates (e.g. SiO2 substrate beneath hBN slab).
+4. Automatically enforces physical dielectric continuity and connectivity.
+5. Solves all eigenbands at Γ and tracks mode degeneracies (phc_mpb).
+6. Supports scale-invariant formulation (e.g. h/a = 0.25) and physical mapping to target
    wavelength (e.g. λ = 436 nm) and thickness (e.g. h = 100 nm).
-6. Exports optimal layout GDS (unit_cell.gds), convergence plots, and optimal loci into
+7. Refines continuous degeneracy locus curves and evaluates adjacent group velocities.
+8. Solves and plots full band diagrams (both normalized and physical wavelength) for both
+   the global optimum and the closest physical match point on the refined locus.
+9. Exports optimal layout GDS (unit_cell.gds), convergence plots, and optimal loci into
    the canonical output directory.
 
 Command-Line Usage:
-    # 100-point initial exploration (h/a=0.1, te_like, 16 workers, target A2 + E1 + E1):
-    python analysis/optimize_c6v_2b_6d.py --initial-points 100 --slab-thickness 0.1 --workers 16
+    # 100-point initial exploration (h/a=0.25, te_like, 16 workers, target A2 + E1 + E1):
+    python analysis/optimize_c6v_2b_6d.py --initial-points 100 --slab-thickness 0.25 --workers 16
 
     # Rapid smoke test (< 5 seconds, low resolution, 2 initial points, 1 iteration):
     python analysis/optimize_c6v_2b_6d.py --quick
 
-    # 3D slab membrane optimization with custom target irreps and occurrences:
-    python analysis/optimize_c6v_2b_6d.py --target-irreps A_2 E_1 E_1 --irrep-occurrences 1 4 4
+    # 3D slab on SiO2 substrate matching 3 reference modes from unperturbed air-clad membrane:
+    python analysis/optimize_c6v_2b_6d.py --substrate-material sio2 --match-reference-modes --workers 16
 
-    # Refine continuous degeneracy locus and compute group velocities:
+    # Refine continuous degeneracy locus and plot closest match full band diagram:
     python analysis/optimize_c6v_2b_6d.py --analyze-locus
 
 CLI Options:
-    --quick                 Run in rapid smoke-test mode with minimal resolution and evaluations.
-    --slab-thickness H      Membrane slab thickness in units of a (default: 0.1 for h/a=0.1).
-    --supercell-z Z         Supercell height in units of a (default: 4.0).
-    --vary-p2               Optimize 6d position parameter p2 in addition to radii r1 and r2.
-    --polarization POL      Polarization mode: 'te_like' or 'tm_like' (default: 'te_like').
-    --target-irreps IRREPS  Target irreducible representations at Gamma (default: A_2 E_1 E_1).
-    --irrep-occurrences OCC Occurrence counts above min_band (default: 1 4 4).
-    --target-wavelength NM  Target physical wavelength in nm (default: 436.0).
-    --r1-bounds MIN MAX     Search bounds for primary hole radius r1 in units of a (default: 0.05 0.25).
-    --r2-bounds MIN MAX     Search bounds for satellite hole radius r2 in units of a (default: 0.02 0.10).
-    --resolution RES        In-plane MPB computational mesh resolution per pitch a (default: 18, quick: 12).
-    --resolution-z RESZ     Vertical MPB mesh resolution for 3D slabs (default: 16, quick: 6).
-    --num-bands N           Number of eigenbands to compute at Gamma (default: 15, quick: 6).
-    --initial-points N      Number of initial quasi-random exploration points (default: 100, quick: 2).
-    --max-iterations N      Number of Bayesian optimization active learning generations (default: 0, quick: 1).
-    --workers W             Number of parallel worker processes (default: 20, quick: 1).
-    --output-dir PATH       Custom output directory override (default: auto-resolved by phc_hydra).
-    --no-progress           Disable the real-time tqdm progress bar.
-    --analyze-locus         Refine continuous degeneracy locus curve and compute adjacent group velocity.
+    --quick                     Run in rapid smoke-test mode with minimal resolution and evaluations.
+    --slab-thickness H          Membrane slab thickness in units of a (default: 0.25 for h/a=0.25).
+    --supercell-z Z             Supercell height in units of a (default: 4.0).
+    --vary-p2                   Optimize 6d position parameter p2 in addition to radii r1 and r2.
+    --substrate-material MAT    Substrate cladding material key from phc_materials (e.g. 'sio2', 'air').
+    --substrate-thickness SUB_H Substrate buffer thickness in units of a (default: 2.0).
+    --match-reference-modes     Identify target degeneracy by tracking 3 reference modes via modal overlap.
+    --reference-run DIR         Path to previous unperturbed simulation directory.
+    --reference-bands B1 B2 B3  1-based band indices of 3 reference modes at Gamma (default: 9 10 11).
+    --reference-r1 R1           Nominal r1 for unperturbed reference cell.
+    --reference-r2 R2           Nominal r2 for unperturbed reference cell.
+    --reference-p2 P2           Nominal p2 for unperturbed reference cell (default: 0.25).
+    --polarization POL          Polarization mode: 'te_like', 'tm_like', or 'all' (default: 'all' if substrate).
+    --target-irreps IRREPS      Target irreducible representations at Gamma (default: A_2 E_1 E_1).
+    --irrep-occurrences OCC     Occurrence counts above min_band (default: 1 4 4).
+    --target-wavelength NM      Target physical wavelength in nm (default: 436.0).
+    --target-thickness NM       Target physical slab thickness in nm (default: 100.0).
+    --r1-bounds MIN MAX         Search bounds for primary hole radius r1 in units of a (default: 0.15 0.25).
+    --r2-bounds MIN MAX         Search bounds for satellite hole radius r2 in units of a (default: 0.05 0.10).
+    --resolution RES            In-plane MPB computational mesh resolution per pitch a (default: 18, quick: 12).
+    --resolution-z RESZ         Vertical MPB mesh resolution for 3D slabs (default: 16, quick: 6).
+    --num-bands N               Number of eigenbands to compute at Gamma (default: 15 / 28 on substrate).
+    --initial-points N          Number of initial quasi-random exploration points (default: 100, quick: 2).
+    --max-iterations N          Number of Bayesian optimization active learning generations (default: 0, quick: 1).
+    --workers W                 Number of parallel worker processes (default: 20, quick: 1).
+    --output-dir PATH           Custom output directory override (default: auto-resolved by phc_hydra).
+    --no-progress               Disable the real-time tqdm progress bar.
+    --analyze-locus             Refine continuous degeneracy locus curve and compute adjacent group velocity.
+    --locus-mode MODE           Mode for degeneracy locus refinement ('cartesian', 'polar', or 'auto').
+    --max-refine-steps N         Maximum number of refinement steps for the degeneracy locus (default: 5).
 """
 
 import argparse
 import json
+import select
 import sys
 import warnings
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -64,9 +83,21 @@ if str(_repo_root) not in sys.path:
 
 import gdsfactory as gf
 import meep as mp
+import numpy as np
 from phc_layout.components.unit_cell import phc_wyckoff_unit_cell
 from phc_layout.lattice import HexagonalLattice
-from phc_optimization import BayesianOptimizer
+from phc_mpb import (
+    create_lattice,
+    create_mode_solver,
+    extract_eigenmode_fields,
+    gds_to_mpb_geometry,
+    run_band_solver,
+)
+from phc_optimization import (
+    BayesianOptimizer,
+    ModalOverlapDegeneracyObjective,
+)
+from phc_utils import export_gds, silence_c_stdout
 
 # Suppress MPB solver chatter and repetitive Sobol balance warnings
 mp.verbosity(0)
@@ -100,13 +131,445 @@ def make_c6v_2b_6d_unit_cell(
     )
 
 
+def solve_unperturbed_reference_modes(
+    r1: float = 0.20,
+    r2: float = 0.07,
+    p2: float = 0.25,
+    pitch: float = 1.0,
+    slab_thickness: float = 0.25,
+    supercell_z: float = 4.0,
+    matrix_material: str = "hBN",
+    cladding_material: str = "air",
+    resolution: int = 18,
+    resolution_z: int = 16,
+    num_bands: int = 15,
+    target_bands: Sequence[int] = (9, 10, 11),
+    quick: bool = False,
+    verbose: bool = True,
+) -> tuple[
+    dict[int, tuple[np.ndarray, np.ndarray | None]], dict[int, float], list[int]
+]:
+    """Solves the unperturbed symmetric air-clad slab at Γ to extract 3 reference eigenfields.
+
+    Args:
+        r1: Radius of primary holes at Wyckoff position 2b in micrometers.
+        r2: Radius of satellite holes at Wyckoff position 6d in micrometers.
+        p2: Coordinate parameter for Wyckoff position 6d.
+        pitch: Lattice pitch a in micrometers.
+        slab_thickness: Normalized slab thickness in units of pitch a.
+        supercell_z: Supercell height in units of pitch a.
+        slab_material: Slab core material key (default: "hBN").
+        cladding_material: Upper and lower cladding material key (default: "air").
+        resolution: In-plane MPB computational grid resolution.
+        resolution_z: Vertical MPB computational grid resolution.
+        num_bands: Number of eigenbands computed at Γ.
+        target_bands: Sequence of 3 target reference band indices to extract.
+        quick: If True, uses low resolution and lower band indices for smoke tests.
+        verbose: If True, logs progress and extracted eigenfrequencies.
+
+    Returns:
+        Tuple of (ref_fields_dict, ref_freqs_dict, resolved_target_bands).
+    """
+    if verbose:
+        print(
+            "\n--- Solving Unperturbed Reference System (Air Cladding, Symmetric) at Γ ---"
+        )
+
+    ref_comp = make_c6v_2b_6d_unit_cell(r1=r1, r2=r2, p2=p2, pitch=pitch)
+    hex_lat = HexagonalLattice(a=pitch)
+    lattice = create_lattice(
+        lattice_type=hex_lat,
+        pitch=pitch,
+        dimension="3D_slab",
+        supercell_z=supercell_z,
+    )
+
+    norm_h = slab_thickness / max(pitch, 1e-12)
+    geometry = gds_to_mpb_geometry(
+        gds_source=ref_comp,
+        pitch=pitch,
+        dimension="3D_slab",
+        slab_thickness=slab_thickness,
+        slab_material=matrix_material,
+        substrate_material=None,
+        etch_material=cladding_material,
+        geometry_lattice=lattice,
+    )
+
+    k_points = [mp.Vector3(0.0, 0.0, 0.0)]
+    res = (resolution, resolution, resolution_z)
+
+    with silence_c_stdout():
+        ms_ref = create_mode_solver(
+            geometry_lattice=lattice,
+            geometry=geometry,
+            k_points=k_points,
+            default_material=cladding_material,
+            resolution=res,
+            num_bands=num_bands,
+        )
+        res_ref = run_band_solver(
+            ms=ms_ref,
+            polarization="te_like",
+            dimension="3D_slab",
+            verbose=False,
+        )
+
+    all_freqs = res_ref.get("freqs", {}).get(
+        "te_like",
+        res_ref.get("freqs", {}).get("all", ms_ref.all_freqs),
+    )[0]
+
+    # Resolve target bands
+    resolved_bands = [b for b in target_bands if b <= len(all_freqs)]
+    if len(resolved_bands) < len(target_bands):
+        if quick or len(all_freqs) < max(target_bands):
+            resolved_bands = [
+                min(len(all_freqs), i + 2) for i in range(len(target_bands))
+            ]
+            resolved_bands = sorted(set(resolved_bands))
+            while len(resolved_bands) < len(target_bands) and len(resolved_bands) < len(
+                all_freqs
+            ):
+                resolved_bands.append(resolved_bands[-1] + 1)
+        else:
+            resolved_bands = list(target_bands)
+
+    ref_fields: dict[int, tuple[np.ndarray, np.ndarray | None]] = {}
+    ref_freqs: dict[int, float] = {}
+
+    for b in resolved_bands:
+        f = float(all_freqs[b - 1])
+        ref_freqs[b] = f
+        ref_fields[b] = extract_eigenmode_fields(
+            ms_ref,
+            band=b,
+            field="electric_displacement",
+            slab_thickness=norm_h,
+            z_center=0.0,
+        )
+        if verbose:
+            lam_nm = (pitch / f * 1000.0) if f > 0 else 0.0
+            print(f"  Reference Band {b:2d}: ω~ = {f:.5f} (λ = {lam_nm:.1f} nm)")
+
+    return ref_fields, ref_freqs, resolved_bands
+
+
+def timed_input(prompt: str, timeout: float = 60.0) -> str | None:
+    """Prompts for input with a timeout in seconds.
+
+    If stdin is not a TTY or timeout expires without input, returns None.
+
+    Args:
+        prompt: Display string prompting user for input.
+        timeout: Duration in seconds to wait before timing out (default: 60.0).
+
+    Returns:
+        Stripped string input if received before timeout, otherwise None.
+    """
+    if not sys.stdin.isatty():
+        return None
+    print(prompt, end="", flush=True)
+    rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+    if rlist:
+        return sys.stdin.readline().strip()
+    print(
+        f"\n[Timer] No input received within {int(timeout)}s. Skipping reference save."
+    )
+    return None
+
+
+def extract_optimal_point_fields(
+    params: dict[str, Any],
+    pitch: float = 1.0,
+    slab_thickness: float = 0.25,
+    supercell_z: float = 4.0,
+    resolution: int = 18,
+    resolution_z: int = 16,
+    matrix_material: str = "hBN",
+    cladding_material: str = "air",
+    substrate_material: str | None = None,
+    substrate_thickness: float | None = None,
+    polarization: str = "all",
+    target_bands: Sequence[int] = (2, 3, 4),
+    verbose: bool = True,
+) -> tuple[dict[int, tuple[np.ndarray, np.ndarray | None]], dict[int, float]]:
+    """Solves the optimal unit cell at Γ and extracts spatial eigenmode fields (E and D).
+
+    Args:
+        params: Geometric parameters for unit cell (r1, r2, p2, pitch).
+        pitch: Unit cell lattice pitch in micrometers (default: 1.0).
+        slab_thickness: Normalized slab thickness h in units of pitch a.
+        supercell_z: Vertical supercell height in units of pitch a.
+        resolution: In-plane MPB computational grid resolution.
+        resolution_z: Vertical MPB computational grid resolution.
+        matrix_material: Slab core material key.
+        cladding_material: Top cladding material key.
+        substrate_material: Bottom substrate cladding material key (or None).
+        substrate_thickness: Substrate buffer thickness in units of a (or None).
+        polarization: MPB polarization mode ('all', 'te_like', etc.).
+        target_bands: Sequence of 1-based band indices to extract.
+        verbose: Whether to log progress to stdout.
+
+    Returns:
+        Tuple of (fields_dict, freqs_dict) where fields_dict maps band index to (e_field, d_field).
+    """
+    if verbose:
+        print("\n--- Solving Optimal Design at Γ to Extract Modal Fields ---")
+
+    r1_val = float(params.get("r1", 0.2))
+    r2_val = float(params.get("r2", 0.08))
+    p2_val = float(params.get("p2", 0.25))
+
+    comp = make_c6v_2b_6d_unit_cell(r1=r1_val, r2=r2_val, p2=p2_val, pitch=pitch)
+    lattice = create_lattice(
+        lattice_type=HexagonalLattice(a=pitch),
+        pitch=pitch,
+        dimension="3D_slab",
+        supercell_z=supercell_z,
+    )
+    norm_h = slab_thickness / max(pitch, 1e-12)
+    geometry = gds_to_mpb_geometry(
+        gds_source=comp,
+        pitch=pitch,
+        dimension="3D_slab",
+        slab_thickness=slab_thickness,
+        slab_material=matrix_material,
+        substrate_material=substrate_material,
+        substrate_thickness=float(substrate_thickness)
+        if substrate_thickness is not None
+        else None,
+        etch_material=cladding_material,
+        geometry_lattice=lattice,
+    )
+
+    k_points = [mp.Vector3(0.0, 0.0, 0.0)]
+    res = (resolution, resolution, resolution_z)
+    max_b = max(target_bands) if target_bands else 15
+    num_b = max(max_b + 4, 15)
+
+    default_mat = (
+        substrate_material
+        if (substrate_material and substrate_material != "air")
+        else cladding_material
+    )
+
+    with silence_c_stdout():
+        ms = create_mode_solver(
+            geometry_lattice=lattice,
+            geometry=geometry,
+            k_points=k_points,
+            default_material=default_mat,
+            resolution=res,
+            num_bands=num_b,
+        )
+        res_solver = run_band_solver(
+            ms=ms,
+            polarization=polarization,
+            dimension="3D_slab",
+            verbose=False,
+        )
+
+    all_f = res_solver.get("freqs", {}).get(
+        polarization.lower(),
+        res_solver.get("freqs", {}).get("all", ms.all_freqs),
+    )[0]
+
+    fields_dict: dict[int, tuple[np.ndarray, np.ndarray | None]] = {}
+    freqs_dict: dict[int, float] = {}
+
+    for b in target_bands:
+        if b <= len(all_f):
+            f_val = float(all_f[b - 1])
+            freqs_dict[b] = f_val
+            e_field, d_field = extract_eigenmode_fields(
+                ms,
+                band=b,
+                field="electric_displacement",
+                slab_thickness=norm_h,
+                z_center=0.0,
+            )
+            fields_dict[b] = (e_field, d_field)
+            if verbose:
+                lam_nm = (pitch / f_val * 1000.0) if f_val > 0 else 0.0
+                print(
+                    f"  Optimal Mode Band {b:2d}: ω~ = {f_val:.5f} (λ = {lam_nm:.1f} nm)"
+                )
+
+    return fields_dict, freqs_dict
+
+
+def save_optimal_field_reference(
+    name: str,
+    params: dict[str, Any],
+    pitch: float = 1.0,
+    slab_thickness: float = 0.25,
+    supercell_z: float = 4.0,
+    resolution: int = 18,
+    resolution_z: int = 16,
+    matrix_material: str = "hBN",
+    cladding_material: str = "air",
+    substrate_material: str | None = None,
+    substrate_thickness: float | None = None,
+    polarization: str = "all",
+    tracked_bands: Sequence[int] = (2, 3, 4),
+    base_dir: Path | str = "saved_data",
+) -> Path:
+    """Saves the optimal point fields, geometry parameters, and GDS layout to saved_data/<name>/.
+
+    Args:
+        name: Subdirectory name for the saved reference dataset.
+        params: Geometric parameters dictionary (r1, r2, p2, pitch).
+        pitch: Unit cell lattice pitch in micrometers (default: 1.0).
+        slab_thickness: Normalized slab thickness h in units of pitch a.
+        supercell_z: Vertical supercell height in units of pitch a.
+        resolution: In-plane MPB computational grid resolution.
+        resolution_z: Vertical MPB computational grid resolution.
+        matrix_material: Slab core material key.
+        cladding_material: Top cladding material key.
+        substrate_material: Bottom substrate cladding material key (or None).
+        substrate_thickness: Substrate buffer thickness in units of a (or None).
+        polarization: MPB polarization mode ('all', 'te_like', etc.).
+        tracked_bands: Sequence of 1-based band indices to save.
+        base_dir: Base directory where reference folders are stored (default: 'saved_data').
+
+    Returns:
+        Path to the created saved_data/<name>/ directory.
+    """
+    save_dir = Path(base_dir).resolve() / name
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    fields_dict, freqs_dict = extract_optimal_point_fields(
+        params=params,
+        pitch=pitch,
+        slab_thickness=slab_thickness,
+        supercell_z=supercell_z,
+        resolution=resolution,
+        resolution_z=resolution_z,
+        matrix_material=matrix_material,
+        cladding_material=cladding_material,
+        substrate_material=substrate_material,
+        substrate_thickness=substrate_thickness,
+        polarization=polarization,
+        target_bands=tracked_bands,
+        verbose=True,
+    )
+
+    npz_data: dict[str, np.ndarray] = {}
+    for b, (e_arr, d_arr) in fields_dict.items():
+        if e_arr is not None:
+            npz_data[f"e_{b}"] = e_arr
+        if d_arr is not None:
+            npz_data[f"d_{b}"] = d_arr
+
+    fields_file = save_dir / "fields.npz"
+    np.savez_compressed(fields_file, **npz_data)
+
+    meta = {
+        "name": name,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "geometry": {
+            "r1": float(params.get("r1", 0.0)),
+            "r2": float(params.get("r2", 0.0)),
+            "p": float(params.get("pitch", pitch)),
+            "p2": float(params.get("p2", 0.25)),
+            "slab_thickness": float(slab_thickness),
+            "supercell_thickness": float(supercell_z),
+            "resolution": int(resolution),
+            "resolution_z": int(resolution_z),
+            "substrate_material": substrate_material,
+            "substrate_thickness": float(substrate_thickness)
+            if substrate_thickness is not None
+            else None,
+            "matrix_material": matrix_material,
+            "cladding_material": cladding_material,
+        },
+        "polarization": polarization,
+        "bands": list(tracked_bands),
+        "frequencies": {str(b): f for b, f in freqs_dict.items()},
+        "files": {
+            "fields_npz": "fields.npz",
+            "unit_cell_gds": "unit_cell.gds",
+        },
+    }
+    meta_file = save_dir / "metadata.json"
+    with open(meta_file, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
+    comp = make_c6v_2b_6d_unit_cell(
+        r1=float(params.get("r1", 0.2)),
+        r2=float(params.get("r2", 0.08)),
+        p2=float(params.get("p2", 0.25)),
+        pitch=pitch,
+    )
+    gds_file = save_dir / "unit_cell.gds"
+    export_gds(comp, gds_file, overwrite=True)
+
+    print(f"\n[Saved] Reference data successfully saved to '{save_dir}':")
+    print(f"  - Fields:   {fields_file}")
+    print(f"  - Metadata: {meta_file}")
+    print(f"  - Layout:   {gds_file}")
+    return save_dir
+
+
+def load_saved_reference_data(
+    reference_data_path: Path | str,
+) -> tuple[
+    dict[int, tuple[np.ndarray, np.ndarray | None]],
+    dict[int, float],
+    list[int],
+    dict[str, Any],
+]:
+    """Loads pre-saved reference modal fields, frequencies, and geometry metadata.
+
+    Args:
+        reference_data_path: Path to directory (or file) containing fields.npz and metadata.json.
+
+    Returns:
+        Tuple of (fields_dict, freqs_dict, bands_list, metadata_dict).
+
+    Raises:
+        FileNotFoundError: If fields.npz or metadata.json is missing in reference_data_path.
+    """
+    ref_p = Path(reference_data_path).resolve()
+    if ref_p.is_file():
+        ref_dir = ref_p.parent
+    else:
+        ref_dir = ref_p
+
+    fields_file = ref_dir / "fields.npz"
+    meta_file = ref_dir / "metadata.json"
+
+    if not fields_file.is_file() or not meta_file.is_file():
+        raise FileNotFoundError(
+            f"Reference directory '{ref_dir}' must contain both 'fields.npz' and 'metadata.json'."
+        )
+
+    with open(meta_file, encoding="utf-8") as f:
+        meta = json.load(f)
+
+    bands = [int(b) for b in meta.get("bands", [])]
+    freqs = {int(b): float(f) for b, f in meta.get("frequencies", {}).items()}
+
+    npz = np.load(fields_file)
+    fields: dict[int, tuple[np.ndarray, np.ndarray | None]] = {}
+    for b in bands:
+        e_key = f"e_{b}"
+        d_key = f"d_{b}"
+        e_arr = npz.get(e_key, None)
+        d_arr = npz.get(d_key, None)
+        fields[b] = (e_arr, d_arr)
+
+    return fields, freqs, bands, meta
+
+
 def run_c6v_optimization_pipeline(
     quick: bool = False,
-    slab_thickness: float | None = 0.3,
+    slab_thickness: float | None = 0.25,
     supercell_z: float = 4.0,
     p2: float = 0.25,
     vary_p2: bool = False,
-    polarization: str = "te_like",
+    polarization: str | None = None,
     resolution: int | None = None,
     resolution_z: int | None = None,
     num_bands: int | None = None,
@@ -116,6 +579,15 @@ def run_c6v_optimization_pipeline(
     num_workers: int | None = None,
     matrix_material: str = "hBN",
     cladding_material: str = "air",
+    substrate_material: str | None = None,
+    substrate_thickness: float = 2.0,
+    match_reference_modes: bool = False,
+    reference_data: str | Path | None = None,
+    reference_run: str | Path | None = None,
+    reference_bands: Sequence[int] = (9, 10, 11),
+    reference_r1: float | None = None,
+    reference_r2: float | None = None,
+    reference_p2: float = 0.25,
     output_dir: Path | str | None = None,
     show_progress: bool = True,
     analyze_locus: bool = False,
@@ -127,25 +599,34 @@ def run_c6v_optimization_pipeline(
     r1_bounds: tuple[float, float] = (0.15, 0.25),
     r2_bounds: tuple[float, float] = (0.05, 0.10),
     locus_mode: str = "cartesian",
+    max_refine_steps: int = 5,
 ) -> dict[str, Any]:
     """Runs the Bayesian Optimization pipeline for the C6v 2b-6d unit cell.
 
     Args:
         quick: If True, executes a rapid low-resolution smoke test (<5 s).
-        slab_thickness: Normalized membrane thickness h/a (default: 0.3, None for 2D PhC).
+        slab_thickness: Normalized membrane thickness h/a (default: 0.25, None for 2D PhC).
         supercell_z: Vertical supercell height in units of lattice constant a (default: 4.0).
         p2: Coordinate parameter for Wyckoff position 6d satellite holes (default: 0.25).
         vary_p2: If True, includes 6d radial position parameter p2 in optimization bounds.
-        polarization: Target mode polarization ('te_like', 'tm_like', 'te', or 'tm').
+        polarization: Target mode polarization ('te_like', 'tm_like', 'all', or None for auto).
         resolution: In-plane MPB computational mesh resolution per pitch a.
         resolution_z: Vertical MPB computational mesh resolution along z for slabs.
         num_bands: Number of eigenbands computed at Gamma.
-        initial_points: Number of initial quasi-random exploration points (default: 50, quick: 2).
+        initial_points: Number of initial quasi-random exploration points.
         max_iterations: Number of active learning generations.
         batch_size: Candidate points evaluated per generation.
         num_workers: Number of parallel worker processes.
         matrix_material: Slab/matrix dielectric material key (default: "hBN").
-        cladding_material: Cladding material key (default: "air").
+        cladding_material: Upper cladding material key (default: "air").
+        substrate_material: Substrate cladding material key (e.g. "sio2", default: None / "air").
+        substrate_thickness: Substrate buffer thickness in units of pitch a (default: 2.0).
+        match_reference_modes: If True, tracks 3 unperturbed reference modes via spatial overlap.
+        reference_run: Optional directory of previous unperturbed run to load reference parameters.
+        reference_bands: Sequence of 3 reference band indices at Gamma (default: (9, 10, 11)).
+        reference_r1: Optional explicit r1 for unperturbed reference cell.
+        reference_r2: Optional explicit r2 for unperturbed reference cell.
+        reference_p2: Coordinate parameter p2 for unperturbed reference cell (default: 0.25).
         output_dir: Custom output directory or None to auto-resolve via phc_hydra.
         show_progress: Whether to display a real-time progress bar.
         analyze_locus: If True, refines the continuous degeneracy locus manifold.
@@ -156,8 +637,8 @@ def run_c6v_optimization_pipeline(
         target_thickness_nm: Target physical slab thickness in nanometers (default: 100.0).
         r1_bounds: Search range for primary hole radius r1 in units of a (default: (0.15, 0.25)).
         r2_bounds: Search range for satellite hole radius r2 in units of a (default: (0.05, 0.10)).
+        max_refine_steps: Maximum number of refinement steps for the degeneracy locus (default: 5).
         locus_mode: Mode for degeneracy locus refinement ('cartesian' or 'polar' or 'auto').
-
 
     Returns:
         Dictionary containing best parameters, best FOM, residual cost, optimal loci,
@@ -165,17 +646,28 @@ def run_c6v_optimization_pipeline(
     """
     is_3d = slab_thickness is not None
     dim = "3D_slab" if is_3d else "2D"
+    has_substrate = (
+        is_3d
+        and substrate_material is not None
+        and str(substrate_material).strip().lower() not in ("none", "air", "")
+    )
+    sub_mat_key = str(substrate_material).strip() if has_substrate else None
 
     # Map polarization key for 2D vs 3D slab
-    if is_3d:
-        pol_key = "tm_like" if polarization.lower().startswith("tm") else "te_like"
+    if polarization is not None:
+        pol_key = polarization.lower()
+    elif has_substrate or match_reference_modes:
+        # Asymmetric substrate slabs lack horizontal parity; solve all modes
+        pol_key = "all"
+    elif is_3d:
+        pol_key = "te_like"
     else:
-        pol_key = "tm" if polarization.lower().startswith("tm") else "te"
+        pol_key = "te"
 
     if quick:
         default_resolution = 12
         default_resolution_z = 6
-        default_num_bands = 6
+        default_num_bands = 8 if has_substrate else 6
         default_initial_points = 2
         default_max_iterations = 1
         default_batch_size = 1
@@ -184,7 +676,7 @@ def run_c6v_optimization_pipeline(
     else:
         default_resolution = 18
         default_resolution_z = 16
-        default_num_bands = 15
+        default_num_bands = 28 if has_substrate else 15
         default_initial_points = 100
         default_max_iterations = 0
         default_batch_size = 4
@@ -217,18 +709,118 @@ def run_c6v_optimization_pipeline(
     if is_3d:
         fixed_params["slab_thickness"] = float(slab_thickness)  # type: ignore[arg-type]
         fixed_params["supercell_z"] = float(supercell_z)
+        if has_substrate and sub_mat_key:
+            fixed_params["substrate_material"] = sub_mat_key
+            fixed_params["substrate_thickness"] = float(substrate_thickness)
 
-    resolved_indices = list(mode_indices)
-    if quick or bands_val < max(resolved_indices):
-        resolved_indices = [2, 3, 4]
-        bypass_irrep = True
+    # -------------------------------------------------------------
+    # Objective Configuration: Irrep-based vs Modal Overlap Tracking
+    # -------------------------------------------------------------
+    actual_ref_bands: list[int] = []
+    if match_reference_modes:
+        if reference_data is not None:
+            ref_fields, ref_freqs, actual_ref_bands, _ref_meta = (
+                load_saved_reference_data(reference_data)
+            )
+            if show_progress:
+                print(
+                    f"\n--- Loaded Pre-Saved Reference Modal Fields from '{reference_data}' ---"
+                )
+                for b in actual_ref_bands:
+                    f_val = ref_freqs.get(b, 0.0)
+                    lam_nm = (1.0 / f_val * 1000.0) if f_val > 0 else 0.0
+                    print(
+                        f"  Reference Band {b:2d}: ω~ = {f_val:.5f} (λ = {lam_nm:.1f} nm)"
+                    )
+        else:
+            ref_r1_val = reference_r1
+            ref_r2_val = reference_r2
+            if reference_run is not None:
+                ref_p = Path(reference_run).resolve()
+                if ref_p.is_file():
+                    ref_p = ref_p.parent
+                sim_json = ref_p / "simulation_results.json"
+                loci_json = ref_p / "optimal_loci.json"
+                if sim_json.is_file():
+                    try:
+                        with open(sim_json, encoding="utf-8") as f:
+                            s_data = json.load(f)
+                            bp = s_data.get("best_params", {})
+                            if ref_r1_val is None and "r1" in bp:
+                                ref_r1_val = float(bp["r1"])
+                            if ref_r2_val is None and "r2" in bp:
+                                ref_r2_val = float(bp["r2"])
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                elif loci_json.is_file():
+                    try:
+                        with open(loci_json, encoding="utf-8") as f:
+                            l_data = json.load(f)
+                            if (
+                                isinstance(l_data, list)
+                                and l_data
+                                and "x1" in l_data[0]
+                            ):
+                                mid_idx = len(l_data[0]["x1"]) // 2
+                                if ref_r1_val is None:
+                                    ref_r1_val = float(l_data[0]["x1"][mid_idx])
+                                if ref_r2_val is None:
+                                    ref_r2_val = float(l_data[0]["x2"][mid_idx])
+                    except (json.JSONDecodeError, OSError):
+                        pass
 
-    opt = BayesianOptimizer(
-        cell_factory=make_c6v_2b_6d_unit_cell,
-        parameters=search_params,
-        fixed_parameters=fixed_params,
-        objective="dirac_degeneracy",
-        objective_kwargs={
+            if ref_r1_val is None:
+                ref_r1_val = float((r1_bounds[0] + r1_bounds[1]) / 2.0)
+            if ref_r2_val is None:
+                ref_r2_val = float((r2_bounds[0] + r2_bounds[1]) / 2.0)
+
+            resolved_ref_bands = list(reference_bands)
+            if quick or bands_val < max(resolved_ref_bands):
+                resolved_ref_bands = [2, 3, 4]
+
+            ref_fields, ref_freqs, actual_ref_bands = solve_unperturbed_reference_modes(
+                r1=ref_r1_val,
+                r2=ref_r2_val,
+                p2=float(reference_p2),
+                pitch=1.0,
+                slab_thickness=float(slab_thickness)
+                if slab_thickness is not None
+                else 0.25,
+                supercell_z=float(supercell_z),
+                matrix_material=matrix_material,
+                cladding_material=cladding_material,
+                resolution=res_val,
+                resolution_z=res_z_val,
+                num_bands=max(15, max(resolved_ref_bands) + 4) if not quick else 6,
+                target_bands=resolved_ref_bands,
+                quick=quick,
+                verbose=show_progress,
+            )
+
+        obj_instance = ModalOverlapDegeneracyObjective(
+            ref_fields=ref_fields,
+            ref_frequencies=ref_freqs,
+            ref_bands=actual_ref_bands,
+            target_band_candidates=range(1, bands_val + 1),
+            polarization=pol_key,
+            field="electric_displacement",
+            slab_thickness=float(slab_thickness)
+            if slab_thickness is not None
+            else 0.25,
+            pitch=1.0,
+            min_overlap_threshold=0.25 if not quick else 0.05,
+            symmetry_group="C6v",
+        )
+        obj_arg: Any = obj_instance
+        obj_kwargs: dict[str, Any] | None = None
+    else:
+        resolved_indices = list(mode_indices)
+        if quick or bands_val < max(resolved_indices):
+            resolved_indices = [2, 3, 4]
+            bypass_irrep = True
+
+        obj_arg = "dirac_degeneracy"
+        obj_kwargs = {
             "symmetry_group": "C6v",
             "polarization": pol_key,
             "target_irreps": list(target_irreps),
@@ -237,7 +829,17 @@ def run_c6v_optimization_pipeline(
             "mode_indices": resolved_indices,
             "min_band": 2,
             "degeneracy_tol": 0.005,
-        },
+        }
+
+    sub_tag = f"_{sub_mat_key.lower()}" if has_substrate and sub_mat_key else ""
+    geo_name = f"c6v_2b_6d_{dim.lower()}{sub_tag}"
+
+    opt = BayesianOptimizer(
+        cell_factory=make_c6v_2b_6d_unit_cell,
+        parameters=search_params,
+        fixed_parameters=fixed_params,
+        objective=obj_arg,
+        objective_kwargs=obj_kwargs,
         batch_size=b_size,
         num_workers=n_workers,
         strategy="cl_min",
@@ -248,13 +850,15 @@ def run_c6v_optimization_pipeline(
         num_bands=bands_val,
         matrix_material=matrix_material,
         background_material=cladding_material,
+        substrate_material=sub_mat_key,
+        substrate_thickness=float(substrate_thickness) if has_substrate else None,
         enforce_connectivity=True,
         epsilon_threshold=1.1,
         min_neck_width_px=1,
         initial_points=init_pts,
         max_iterations=max_iters,
         output_dir=output_dir,
-        geometry_name=f"c6v_2b_6d_{dim.lower()}",
+        geometry_name=geo_name,
         random_state=42,
         show_progress=show_progress,
     )
@@ -279,7 +883,7 @@ def run_c6v_optimization_pipeline(
             delta_k=0.01,
             exclude_unrefined=False,
             max_residual_gap=1e-4,
-            max_refine_steps=12 if not quick else 2,
+            max_refine_steps=max_refine_steps,
             mode=locus_mode,
             num_workers=n_workers,
             target_wavelength_nm=target_wavelength_nm,
@@ -384,6 +988,23 @@ def run_c6v_optimization_pipeline(
             with open(analysis_file, "w", encoding="utf-8") as f:
                 json.dump(physical_analysis, f, indent=2)
 
+    opt_tracked_bands: list[int] | None = None
+    if len(result.records) > 0:
+        valid_records = [
+            r for r in result.records if not r.metadata.get("penalty", False)
+        ]
+        best_r = (
+            max(valid_records, key=lambda r: r.fom)
+            if valid_records
+            else min(result.records, key=lambda r: r.cost)
+        )
+        if best_r.metadata and "tracked_bands" in best_r.metadata:
+            opt_tracked_bands = [int(b) for b in best_r.metadata["tracked_bands"]]
+        elif hasattr(obj_arg, "ref_bands"):
+            opt_tracked_bands = [int(b) for b in obj_arg.ref_bands]
+        elif hasattr(obj_arg, "mode_indices"):
+            opt_tracked_bands = [int(b) for b in obj_arg.mode_indices]
+
     return {
         "best_params": result.best_params,
         "best_fom": result.best_fom,
@@ -393,6 +1014,10 @@ def run_c6v_optimization_pipeline(
         "refined_loci": locus_results,
         "physical_analysis": physical_analysis,
         "output_dir": str(result.output_dir),
+        "substrate_material": sub_mat_key,
+        "match_reference_modes": match_reference_modes,
+        "tracked_bands": opt_tracked_bands,
+        "polarization": pol_key,
     }
 
 
@@ -411,7 +1036,7 @@ def main() -> None:
         "--slab-thickness",
         type=float,
         default=0.25,
-        help="Membrane slab thickness h in units of pitch a (default: 0.3 for h/a=0.3).",
+        help="Membrane slab thickness h in units of pitch a (default: 0.25 for h/a=0.25).",
     )
     parser.add_argument(
         "--supercell-z",
@@ -431,11 +1056,83 @@ def main() -> None:
         help="Optimize 6d position parameter p2 in addition to radii r1 and r2.",
     )
     parser.add_argument(
+        "--substrate-material",
+        type=str,
+        default=None,
+        help="Substrate cladding material key from phc_materials (e.g. 'sio2', 'air').",
+    )
+    parser.add_argument(
+        "--substrate-thickness",
+        type=float,
+        default=2.0,
+        help="Substrate buffer thickness in units of pitch a (default: 2.0).",
+    )
+    parser.add_argument(
+        "--matrix-material",
+        type=str,
+        default="hBN",
+        help="Slab dielectric core material key from phc_materials (default: 'hBN').",
+    )
+    parser.add_argument(
+        "--cladding-material",
+        type=str,
+        default="air",
+        help="Top cladding dielectric material key from phc_materials (default: 'air').",
+    )
+    parser.add_argument(
+        "--match-reference-modes",
+        action="store_true",
+        help="Identify target degeneracy by tracking 3 reference modes via modal overlap.",
+    )
+    parser.add_argument(
+        "--reference-data",
+        type=str,
+        default=None,
+        help="Path to pre-saved reference dataset directory in 'saved_data/<name>' containing fields.npz and metadata.json.",
+    )
+    parser.add_argument(
+        "--save-reference",
+        type=str,
+        default=None,
+        help="Reference name to save optimal point modal fields directly to 'saved_data/<name>' without prompting.",
+    )
+    parser.add_argument(
+        "--reference-run",
+        type=str,
+        default=None,
+        help="Path to previous unperturbed simulation directory to extract reference cell from.",
+    )
+    parser.add_argument(
+        "--reference-bands",
+        type=int,
+        nargs=3,
+        default=[9, 10, 11],
+        help="1-based band indices of 3 reference modes at Gamma (default: 9 10 11).",
+    )
+    parser.add_argument(
+        "--reference-r1",
+        type=float,
+        default=None,
+        help="Nominal r1 for unperturbed reference cell (default: auto).",
+    )
+    parser.add_argument(
+        "--reference-r2",
+        type=float,
+        default=None,
+        help="Nominal r2 for unperturbed reference cell (default: auto).",
+    )
+    parser.add_argument(
+        "--reference-p2",
+        type=float,
+        default=0.25,
+        help="Nominal p2 for unperturbed reference cell (default: 0.25).",
+    )
+    parser.add_argument(
         "--polarization",
         type=str,
-        default="te_like",
-        choices=["tm", "te", "tm_like", "te_like"],
-        help="Target mode polarization.",
+        default=None,
+        choices=["tm", "te", "tm_like", "te_like", "all", "no_parity"],
+        help="Target mode polarization (default: 'all' when substrate is used, else 'te_like').",
     )
     parser.add_argument(
         "--target-irreps",
@@ -492,7 +1189,7 @@ def main() -> None:
         "--num-bands",
         type=int,
         default=None,
-        help="Number of eigenbands to compute at Gamma (default: 15, quick: 6).",
+        help="Number of eigenbands to compute at Gamma (default: 15 / 28 on substrate).",
     )
     parser.add_argument(
         "--initial-points",
@@ -528,7 +1225,6 @@ def main() -> None:
         action="store_true",
         help="Refine continuous degeneracy locus curve and compute adjacent group velocity.",
     )
-
     parser.add_argument(
         "--locus-mode",
         type=str,
@@ -536,7 +1232,17 @@ def main() -> None:
         choices=["cartesian", "polar", "auto"],
         help="Mode for degeneracy locus refinement (default: cartesian).",
     )
+    parser.add_argument(
+        "--max-refine-steps",
+        type=int,
+        default=5,
+        help="Maximum number of refinement steps for the degeneracy locus (default: 5).",
+    )
     args = parser.parse_args()
+
+    sub_mat = args.substrate_material
+    if args.match_reference_modes and sub_mat is None:
+        sub_mat = "sio2"
 
     print("=" * 72)
     print(" C6v 2b-6d Photonic Crystal Bayesian Optimization ")
@@ -545,10 +1251,22 @@ def main() -> None:
         if args.slab_thickness is not None
         else "2D Periodic Sheet"
     )
-    print(f" Structure: {dim_str} in hBN, Polarization: {args.polarization.upper()}")
-    print(
-        f" Target Irreps: {args.target_irreps} (occurrences: {args.irrep_occurrences})"
+    pol_display = (
+        args.polarization.upper()
+        if args.polarization is not None
+        else ("ALL" if (sub_mat or args.match_reference_modes) else "TE_LIKE")
     )
+    print(f" Structure: {dim_str} in hBN, Polarization: {pol_display}")
+    if sub_mat and sub_mat.lower() != "air":
+        print(f" Substrate: {sub_mat} (thickness = {args.substrate_thickness} a)")
+    if args.match_reference_modes:
+        print(
+            f" Mode Matching: Modal overlap tracking 3 reference modes (bands {args.reference_bands})"
+        )
+    else:
+        print(
+            f" Target Irreps: {args.target_irreps} (occurrences: {args.irrep_occurrences})"
+        )
     print(
         f" Search Bounds: r1 in [{args.r1_bounds[0]}, {args.r1_bounds[1]}], r2 in [{args.r2_bounds[0]}, {args.r2_bounds[1]}]"
     )
@@ -570,6 +1288,17 @@ def main() -> None:
         initial_points=args.initial_points,
         max_iterations=args.max_iterations,
         num_workers=args.workers,
+        matrix_material=args.matrix_material,
+        cladding_material=args.cladding_material,
+        substrate_material=sub_mat,
+        substrate_thickness=args.substrate_thickness,
+        match_reference_modes=args.match_reference_modes,
+        reference_data=args.reference_data,
+        reference_run=args.reference_run,
+        reference_bands=tuple(args.reference_bands),
+        reference_r1=args.reference_r1,
+        reference_r2=args.reference_r2,
+        reference_p2=args.reference_p2,
         output_dir=args.output_dir,
         show_progress=not args.no_progress,
         analyze_locus=args.analyze_locus,
@@ -588,6 +1317,12 @@ def main() -> None:
     print(f"  Best FOM:        {res['best_fom']:.2f}")
     print(f"  Residual Cost:   {res['best_cost']:.6f}")
     print(f"  Evaluations:     {res['total_evaluations']}")
+    if res.get("match_reference_modes"):
+        print(
+            "  Mode Matching:   Tracked 3 unperturbed reference modes via modal overlap"
+        )
+    if res.get("substrate_material"):
+        print(f"  Substrate:       {res['substrate_material']}")
     if res.get("optimal_loci"):
         print(
             f"  Degeneracy Loci: {len(res['optimal_loci'])} manifold curve(s) extracted (optimal_loci.json)"
@@ -643,6 +1378,59 @@ def main() -> None:
         )
     print(f"\n  Output Folder:   {res['output_dir']}")
     print("=" * 72)
+
+    # -------------------------------------------------------------
+    # Interactive Reference Field Data Storage Prompt (60s timer)
+    # -------------------------------------------------------------
+    save_ref_name = args.save_reference
+    if save_ref_name is None and sys.stdin.isatty():
+        print("\n" + "=" * 72)
+        print(" Save Optimal Reference Field Data ")
+        print("=" * 72)
+        ans = timed_input(
+            "Do you want to store the field of the optimal point to 'saved_data'? [y/N] (Auto-skips in 60s): ",
+            timeout=60.0,
+        )
+        if ans and ans.lower() in ("y", "yes"):
+            ts_str = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            default_name = f"c6v_opt_{ts_str}"
+            user_name = timed_input(
+                f"Enter reference name [default: {default_name}] (Auto-skips in 60s): ",
+                timeout=60.0,
+            )
+            save_ref_name = (
+                user_name.strip() if user_name and user_name.strip() else default_name
+            )
+
+    if save_ref_name:
+        opt_bands = res.get("tracked_bands") or args.reference_bands
+        res_val = (
+            args.resolution
+            if args.resolution is not None
+            else (12 if args.quick else 18)
+        )
+        res_z_val = (
+            args.resolution_z
+            if args.resolution_z is not None
+            else (6 if args.quick else 16)
+        )
+        save_optimal_field_reference(
+            name=save_ref_name,
+            params=res["best_params"],
+            pitch=1.0,
+            slab_thickness=float(args.slab_thickness)
+            if args.slab_thickness is not None
+            else 0.25,
+            supercell_z=float(args.supercell_z),
+            resolution=res_val,
+            resolution_z=res_z_val,
+            matrix_material=args.matrix_material,
+            cladding_material=args.cladding_material,
+            substrate_material=sub_mat,
+            substrate_thickness=float(args.substrate_thickness) if sub_mat else None,
+            polarization=res.get("polarization", "all" if sub_mat else "te_like"),
+            tracked_bands=opt_bands,
+        )
 
 
 if __name__ == "__main__":

@@ -590,6 +590,7 @@ def _evaluate_locus_vg_worker(task_args: tuple[Any, ...]) -> tuple[int, float]:
             vg_arr = vg_dict[actual_k]  # shape (1, num_bands, 3)
             t_bands = (
                 getattr(objective, "target_bands", None)
+                or getattr(objective, "ref_bands", None)
                 or getattr(objective, "mode_indices", None)
                 or [max(1, num_bands // 2)]
             )
@@ -894,7 +895,10 @@ class BayesianOptimizer:
         lines.append(sep)
 
         # Parameters
-        param_strs = [f"  {k} = {v:.6f}" for k, v in rec.params.items()]
+        param_strs = [
+            f"  {k} = {v:.6f}" if isinstance(v, (int, float)) else f"  {k} = {v}"
+            for k, v in rec.params.items()
+        ]
         lines.append("Parameters:")
         lines.extend(param_strs)
 
@@ -1414,7 +1418,10 @@ class BayesianOptimizer:
         fig_eps = None
         if plot_eps:
             eps_path = target_dir / f"{prefix}_epsilon.png" if save_plots else None
-            param_str = ", ".join(f"{k}={v:.4f}" for k, v in params.items())
+            param_str = ", ".join(
+                f"{k}={v:.4f}" if isinstance(v, (int, float)) else f"{k}={v}"
+                for k, v in params.items()
+            )
             fig_eps = plot_epsilon(
                 epsilon=eps_array,
                 title=f"{title_prefix} Dielectric Profile ({param_str})",
@@ -1432,18 +1439,30 @@ class BayesianOptimizer:
         )
         if plot_bands:
             pol = getattr(self.objective, "polarization", "te")
+            clad_idx = 1.0
+            if sub_mat and self.dimension == "3D_slab":
+                try:
+                    from phc_materials import get_material
+
+                    clad_idx = float(get_material(sub_mat).index)
+                except (KeyError, ValueError, AttributeError):
+                    clad_idx = 1.0
             with silence_c_stdout():
                 solver_res = run_band_solver(
                     ms=ms,
                     polarization=pol,
                     dimension=self.dimension,
+                    cladding_index=clad_idx,
                     num_workers=num_workers,
                 )
 
             bands_path = (
                 target_dir / f"{prefix}_band_structure.png" if save_plots else None
             )
-            param_str = ", ".join(f"{k}={v:.4f}" for k, v in params.items())
+            param_str = ", ".join(
+                f"{k}={v:.4f}" if isinstance(v, (int, float)) else f"{k}={v}"
+                for k, v in params.items()
+            )
             fig_bands = plot_band_structure(
                 results=solver_res,
                 node_labels=k_labels,
@@ -1726,6 +1745,7 @@ class BayesianOptimizer:
                     vg_arr = vg_dict[actual_k]  # shape (1, num_bands, 3)
                     t_bands = (
                         getattr(self.objective, "target_bands", None)
+                        or getattr(self.objective, "ref_bands", None)
                         or getattr(self.objective, "mode_indices", None)
                         or [max(1, self.num_bands // 2)]
                     )

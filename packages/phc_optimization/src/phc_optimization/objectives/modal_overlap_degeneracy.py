@@ -145,6 +145,15 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
         else:
             self.ref_frequencies = {}
 
+        self._last_tracked_bands: list[int] | None = None
+
+    @property
+    def target_bands(self) -> list[int]:
+        """Returns the active target bands (tracked if evaluated, else ref_bands)."""
+        if self._last_tracked_bands:
+            return list(self._last_tracked_bands)
+        return list(self.ref_bands)
+
     @property
     def name(self) -> str:
         """Descriptive identifier."""
@@ -216,6 +225,7 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
         ranked_targets = tracking_data["ranked_target_bands"]
         k_modes = len(self.ref_bands)
         tracked_bands = ranked_targets[:k_modes]
+        self._last_tracked_bands = list(tracked_bands)
 
         # 3. Retrieve frequencies for tracked bands
         band_freq_map = {

@@ -109,7 +109,10 @@ def run_substrate_band_comparison(
     sz_val = float(params.get("supercell_z", supercell_z))
 
     if verbose:
-        param_str = ", ".join(f"{k}={v:.4f}" for k, v in params.items())
+        param_str = ", ".join(
+            f"{k}={v:.4f}" if isinstance(v, (int, float)) else f"{k}={v}"
+            for k, v in params.items()
+        )
         print("\n" + "=" * 70)
         print(" Comparative Band Structure Analysis: Air vs SiO₂ Substrate")
         print(f"  Design Parameters:   {param_str}")
@@ -207,7 +210,10 @@ def run_substrate_band_comparison(
         p_dir.mkdir(parents=True, exist_ok=True)
         out_fig_path = p_dir / "band_structure_substrate_comparison.png"
 
-    param_summary = ", ".join(f"{k}={v:.3f}" for k, v in params.items())
+    param_summary = ", ".join(
+        f"{k}={v:.3f}" if isinstance(v, (int, float)) else f"{k}={v}"
+        for k, v in params.items()
+    )
     fig_title = (
         f"Photonic Band Structure Comparison: Air vs SiO₂ Substrate ({param_summary})"
     )

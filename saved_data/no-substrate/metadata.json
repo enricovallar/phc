@@ -1,0 +1,33 @@
+{
+  "name": "no-substrate",
+  "timestamp": "2026-09-28T14:11:48.556475+00:00",
+  "geometry": {
+    "r1": 0.18632289588533138,
+    "r2": 0.07935503715886626,
+    "p": 1.0,
+    "p2": 0.25,
+    "slab_thickness": 0.25,
+    "supercell_thickness": 4.0,
+    "resolution": 16,
+    "resolution_z": 16,
+    "substrate_material": null,
+    "substrate_thickness": null,
+    "matrix_material": "hBN",
+    "cladding_material": "air"
+  },
+  "polarization": "te_like",
+  "bands": [
+    9,
+    10,
+    11
+  ],
+  "frequencies": {
+    "9": 0.8238797843269172,
+    "10": 0.8241875022556017,
+    "11": 0.8249198007940317
+  },
+  "files": {
+    "fields_npz": "fields.npz",
+    "unit_cell_gds": "unit_cell.gds"
+  }
+}
