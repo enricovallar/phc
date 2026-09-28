@@ -1,0 +1,58 @@
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/space/space.py:116: UserWarning: Dimension [0.15, 0.25] was inferred to Real(low=0.15, high=0.25, prior='uniform', transform='identity'). In upcoming versions of scikit-optimize, it will be inferred to Categorical(categories=(0.15, 0.25), prior=None). See the documentation of the check_dimension function for the upcoming API.
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/space/space.py:116: UserWarning: Dimension [0.05, 0.1] was inferred to Real(low=0.05, high=0.1, prior='uniform', transform='identity'). In upcoming versions of scikit-optimize, it will be inferred to Categorical(categories=(0.05, 0.1), prior=None). See the documentation of the check_dimension function for the upcoming API.
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/space/space.py:116: UserWarning: Dimension [0.15, 0.25] was inferred to Real(low=0.15, high=0.25, prior='uniform', transform='identity'). In upcoming versions of scikit-optimize, it will be inferred to Categorical(categories=(0.15, 0.25), prior=None). See the documentation of the check_dimension function for the upcoming API.
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/space/space.py:116: UserWarning: Dimension [0.05, 0.1] was inferred to Real(low=0.05, high=0.1, prior='uniform', transform='identity'). In upcoming versions of scikit-optimize, it will be inferred to Categorical(categories=(0.05, 0.1), prior=None). See the documentation of the check_dimension function for the upcoming API.
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/sampler/sobol.py:521: UserWarning: The balance properties of Sobol' points require n to be a power of 2. 0 points have been previously generated, then: n=0+60=60. 
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/sampler/sobol.py:521: UserWarning: The balance properties of Sobol' points require n to be a power of 2. 60 points have been previously generated, then: n=60+60=120. 
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/sampler/sobol.py:521: UserWarning: The balance properties of Sobol' points require n to be a power of 2. 120 points have been previously generated, then: n=120+60=180. 
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/sampler/sobol.py:521: UserWarning: The balance properties of Sobol' points require n to be a power of 2. 180 points have been previously generated, then: n=180+60=240. 
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.15121815549775167, 0.0977123840713533]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.17403116037171704, 0.06621417622727352]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.23928040944568782, 0.09585006183550965]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.2403410291859999, 0.053576428654697555]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.16333146222572878, 0.050132412079784944]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.24540649330978534, 0.08645878930559261]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.16098343972550805, 0.05557988174886475]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.21311902278691283, 0.0820109940398458]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.221178120981244, 0.05652912431611697]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.15037868161145249, 0.0939597629040408]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.20540367028433215, 0.07863356905240147]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.15490519833739883, 0.07951522707953355]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.1886354819602719, 0.07264287202129277]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.17549754512550128, 0.08386799803436659]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.16286863442354585, 0.0985140456166137]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.20408430042499948, 0.08130289754217587]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.2453342807561726, 0.055512585143560056]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.22587335180509668, 0.05346596728100121]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.24294093603648845, 0.08079948421639625]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.23338901708084905, 0.08455493427224264]
+  warnings.warn(
+/zhome/2f/7/202918/miniconda3/envs/mpb-nzi-env/lib/python3.11/site-packages/skopt/optimizer/optimizer.py:517: UserWarning: The objective has been evaluated at point [0.25, 0.1] before, using random point [0.1713052459171721, 0.09074355452774399]
+  warnings.warn(

@@ -2,9 +2,14 @@
 
 from phc_optimization.objectives.base import BaseObjective
 from phc_optimization.objectives.dirac_degeneracy import DiracDegeneracyObjective
+from phc_optimization.objectives.modal_overlap_degeneracy import (
+    ModalOverlapDegeneracyObjective,
+)
 
 OBJECTIVE_REGISTRY: dict[str, type[BaseObjective]] = {
     "dirac_degeneracy": DiracDegeneracyObjective,
+    "modal_overlap_degeneracy": ModalOverlapDegeneracyObjective,
+    "overlap_degeneracy": ModalOverlapDegeneracyObjective,
 }
 
 
@@ -40,5 +45,6 @@ __all__ = [
     "OBJECTIVE_REGISTRY",
     "BaseObjective",
     "DiracDegeneracyObjective",
+    "ModalOverlapDegeneracyObjective",
     "get_objective",
 ]

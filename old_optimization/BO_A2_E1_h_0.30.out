@@ -1,0 +1,240 @@
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Generation 0 complete. Best surrogate score so far: -2.602060
+Generation 1 complete. Best surrogate score so far: -2.602060
+Generation 2 complete. Best surrogate score so far: -2.602060
+Optimization complete.
+Optimal dynamic parameters found: [0.19726039588533137, 0.08326128715886624]
+Optimal dynamic parameters found: [0.19726039588533137, 0.08326128715886624]
+Minimum objective function score: -2.6020599913279625
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+Optimizing parameters ['r1', 'r2'] with MPI parallelism using Bayesian Optimization...
+Objective Mode: log
+Target Cost Floor: 0.0025
+Fixed parameters: {'x_dist': 0.25, 'h': 0.3}
+Tracking irreps: ['A_2', 'E_1', 'E_1'] (occurrences: [1, 4, 4]) in C6v
+[1779437207.847351] [n-62-21-20:2505228:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fc323d90411 was not matched
+[1779437207.847436] [n-62-21-20:2505229:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f331fdd5d91 was not matched
+[1779437207.879410] [n-62-21-10:429405:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f566bdd7e51 was not matched
+[1779437207.881106] [n-62-21-10:429404:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f452bdc36d1 was not matched
+[1779437207.881125] [n-62-21-10:429402:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f47831c9911 was not matched
+[1779437207.881373] [n-62-21-10:429403:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f7ba3dcda91 was not matched
+[1779437207.881362] [n-62-21-15:2685020:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f2f1fd9a7d1 was not matched
+[1779437207.881363] [n-62-21-15:2685023:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f491ebd3cd1 was not matched
+[1779437207.881351] [n-62-21-15:2685024:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fba36bcfb51 was not matched
+[1779437207.881354] [n-62-21-15:2685025:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f1bc7dd1c11 was not matched
+[1779437207.881698] [n-62-21-10:429401:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f65167bf551 was not matched
+[1779437207.881735] [n-62-21-15:2685021:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fd0df5e0151 was not matched
+[1779437207.881969] [n-62-21-15:2685026:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fe833de0151 was not matched
+[1779437207.882456] [n-62-21-17:1488116:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fbb83de2211 was not matched
+[1779437207.882640] [n-62-21-10:429400:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f3f97d9e951 was not matched
+[1779437207.882645] [n-62-21-17:1488113:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f914bd9e951 was not matched
+[1779437207.882831] [n-62-21-17:1488117:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f0b83de0151 was not matched
+[1779437207.883047] [n-62-21-17:1488114:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fed97de6391 was not matched
+[1779437207.883141] [n-62-21-17:1488115:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fa66bdde091 was not matched
+[1779437207.883237] [n-62-21-17:1488118:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7fc8d7dd9f11 was not matched
+[1779437207.883664] [n-62-21-17:1488119:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7efe97de0151 was not matched
+[1779437207.883974] [n-62-21-10:429406:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f03dbdc5791 was not matched
+[1779437207.884676] [n-62-21-15:2685022:0]       tag_match.c:62   UCX  WARN  unexpected tag-receive descriptor 0x7f176fdd3cd1 was not matched
+
+------------------------------------------------------------
+Sender: LSF System <lsfadmin@hpc.dtu.dk>
+Subject: Job 28491350: <BO_A2_E1_h_0.30> in cluster <dcc> Done
+
+Job <BO_A2_E1_h_0.30> was submitted from host <n-62-27-21> by user <enrva> in cluster <dcc> at Fri May 22 10:05:20 2026
+Job was executed on host(s) <7*n-62-21-7>, in queue <hpc>, as user <enrva> in cluster <dcc> at Fri May 22 10:05:22 2026
+                            <7*n-62-21-10>
+                            <7*n-62-21-15>
+                            <7*n-62-21-17>
+                            <2*n-62-21-20>
+</zhome/2f/7/202918> was used as the home directory.
+</zhome/2f/7/202918/phc_nzi/notebooks/phd> was used as the working directory.
+Started at Fri May 22 10:05:22 2026
+Terminated at Fri May 22 10:06:49 2026
+Results reported at Fri May 22 10:06:49 2026
+
+Your job looked like:
+
+------------------------------------------------------------
+# LSBATCH: User input
+#!/bin/bash
+#BSUB -J BO_A2_E1_h_0.30
+#BSUB -q hpc
+#BSUB -n 30
+#BSUB -W 24:00
+#BSUB -R "rusage[mem=1GB]"
+#BSUB -R "span[ptile=7]"
+#BSUB -oo /work3/enrva/phc_nzi_data/MPB_data/C6v_hBN_slab_optimization/BO_A2_E1_h_0.30/BO_A2_E1_h_0.30.out
+#BSUB -eo /work3/enrva/phc_nzi_data/MPB_data/C6v_hBN_slab_optimization/BO_A2_E1_h_0.30/BO_A2_E1_h_0.30.err
+module purge
+source /zhome/2f/7/202918/miniconda3/etc/profile.d/conda.sh
+conda activate mpb-nzi-env
+mpirun -np 30 python /zhome/2f/7/202918/phc_nzi/src/phc_nzi/mpi_bayesian_optimization.py --run_opt --param_names="r1,r2" --simulation_name="BO_A2_E1_h_0.30" --directory="/work3/enrva/phc_nzi_data/MPB_data/C6v_hBN_slab_optimization/BO_A2_E1_h_0.30" --maxiter=3 --polarization="zeven" --batch_size=30 --objective_mode="log" --strategy="cl_min" --target_cost=0.0025 --target_irreps A_2 E_1 E_1 --irrep_occurrences 1 4 4 --symmetry_group C6v --height_slab=0.3 --bo_options='{"dimensions": [[0.15, 0.25], [0.05, 0.1]], "acq_func": "LCB", "acq_func_kwargs": {"kappa": 3.5}, "n_initial_points": 60, "initial_point_generator": "sobol", "random_state": 42}' --fixed_params='{"x_dist": 0.25, "h": 0.3}'
+
+------------------------------------------------------------
+
+Successfully completed.
+
+Resource usage summary:
+
+    CPU time :                                   2182.07 sec.
+    Max Memory :                                 6031 MB
+    Average Memory :                             3652.33 MB
+    Total Requested Memory :                     30720.00 MB
+    Delta Memory :                               24689.00 MB
+    Max Swap :                                   -
+    Max Processes :                              44
+    Max Threads :                                135
+    Run time :                                   87 sec.
+    Turnaround time :                            89 sec.
+
+The output (if any) is above this job summary.
+
+
+
+PS:
+
+Read file </work3/enrva/phc_nzi_data/MPB_data/C6v_hBN_slab_optimization/BO_A2_E1_h_0.30/BO_A2_E1_h_0.30.err> for stderr output of this job.
+

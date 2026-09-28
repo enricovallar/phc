@@ -14,6 +14,7 @@ from phc_mpb import (
     get_epsilon_grid,
     get_high_symmetry_kpath,
     lattice_to_mpb_lattice,
+    plot_band_diagram,
     plot_band_structure,
     plot_epsilon,
     to_mpb_lattice,
@@ -231,6 +232,157 @@ def test_replot_band_structure_from_results(tmp_path):
     )
     assert fig_auto is not None
     plt.close(fig_auto)
+
+    # 4. Test replotting with normalize=False (wavelength in um)
+    fig_wl = replot_band_structure_from_results(
+        results_path=json_path,
+        normalize=False,
+    )
+    assert fig_wl is not None
+    ax_wl = fig_wl.axes[0]
+    assert "Wavelength" in ax_wl.get_ylabel()
+    assert r"\mu" in ax_wl.get_ylabel()
+    plt.close(fig_wl)
+
+
+def test_plot_band_structure_normalize_true_default():
+    """Verifies that normalize=True is default and displays normalized frequency."""
+    k_pts, labels, indices = get_high_symmetry_kpath("hexagonal", k_density=3)
+    num_k = len(k_pts)
+    freqs = np.array([[0.25, 0.5]] * num_k)
+    results = {"freqs": {"te": freqs}}
+
+    fig = plot_band_structure(results, labels, indices)
+    ax = fig.axes[0]
+    assert "Normalized Frequency" in ax.get_ylabel()
+    lines = [l for l in ax.get_lines() if l.get_linestyle() in ("None", "none", "")]
+    assert len(lines) == 2
+    # Verify values on y-axis match original normalized frequency
+    assert np.isclose(lines[0].get_ydata()[0], 0.25)
+    assert np.isclose(lines[1].get_ydata()[0], 0.50)
+    plt.close(fig)
+
+
+def test_plot_band_structure_normalize_false_wavelength():
+    """Verifies that normalize=False converts frequencies to physical wavelength in um."""
+    k_pts, labels, indices = get_high_symmetry_kpath("hexagonal", k_density=3)
+    num_k = len(k_pts)
+    # Frequencies: 0.25 and 0.50. With pitch = 0.5 um:
+    # lambda_1 = 0.5 / 0.25 = 2.0 um
+    # lambda_2 = 0.5 / 0.50 = 1.0 um
+    freqs = np.array([[0.25, 0.5]] * num_k)
+    results = {
+        "freqs": {"te": freqs},
+        "light_line": np.full(num_k, 0.2),
+    }
+
+    fig = plot_band_structure(
+        results,
+        labels,
+        indices,
+        normalize=False,
+        pitch=0.5,
+    )
+    ax = fig.axes[0]
+    assert "Wavelength" in ax.get_ylabel()
+    assert r"\mu" in ax.get_ylabel()
+    # Check default lam_min=0.3 and lam_max=0.6 limits
+    assert np.isclose(ax.get_ylim()[0], 0.3)
+    assert np.isclose(ax.get_ylim()[1], 0.6)
+
+    lines = [l for l in ax.get_lines() if l.get_linestyle() in ("None", "none", "")]
+    assert len(lines) == 2
+    # First band frequency 0.25 -> wavelength 2.0 um
+    assert np.isclose(lines[0].get_ydata()[0], 2.0)
+    # Second band frequency 0.50 -> wavelength 1.0 um
+    assert np.isclose(lines[1].get_ydata()[0], 1.0)
+
+    # Light line: freq 0.2 -> wavelength 0.5 / 0.2 = 2.5 um
+    ll_lines = [l for l in ax.get_lines() if l.get_linestyle() == "--"]
+    assert len(ll_lines) == 1
+    assert np.isclose(ll_lines[0].get_ydata()[0], 2.5)
+
+    plt.close(fig)
+
+    # Verify custom lam_min and lam_max
+    fig_custom = plot_band_structure(
+        results,
+        labels,
+        indices,
+        normalize=False,
+        pitch=0.5,
+        lam_min=0.8,
+        lam_max=2.8,
+    )
+    ax_custom = fig_custom.axes[0]
+    assert np.isclose(ax_custom.get_ylim()[0], 0.8)
+    assert np.isclose(ax_custom.get_ylim()[1], 2.8)
+    plt.close(fig_custom)
+
+
+def test_plot_band_structure_normalize_false_pitch_from_results():
+    """Verifies pitch is automatically inferred from results dictionary when normalize=False."""
+    k_pts, labels, indices = get_high_symmetry_kpath("hexagonal", k_density=3)
+    num_k = len(k_pts)
+    freqs = np.array([[0.25, 0.5]] * num_k)
+    results = {
+        "freqs": {"te": freqs},
+        "geometry": {"pitch_um": 0.4},
+    }
+
+    # Calling without explicit pitch kwarg
+    fig = plot_band_structure(results, labels, indices, normalize=False)
+    ax = fig.axes[0]
+    lines = [l for l in ax.get_lines() if l.get_linestyle() in ("None", "none", "")]
+    # lambda_1 = 0.4 / 0.25 = 1.6 um
+    assert np.isclose(lines[0].get_ydata()[0], 1.6)
+    plt.close(fig)
+
+
+def test_plot_band_structure_normalize_false_invalid_args_raises():
+    """Verifies ValueError is raised when pitch or lam_min/lam_max is invalid with normalize=False."""
+    freqs = np.array([[0.25, 0.5], [0.26, 0.51]])
+    results = {"freqs": {"te": freqs}}
+
+    # Missing pitch
+    with pytest.raises(ValueError, match="Lattice constant 'pitch'"):
+        plot_band_structure(results, normalize=False)
+
+    # Non-positive pitch
+    with pytest.raises(ValueError, match="strictly positive"):
+        plot_band_structure(results, normalize=False, pitch=0.0)
+
+    with pytest.raises(ValueError, match="strictly positive"):
+        plot_band_structure(results, normalize=False, pitch=-0.5)
+
+    # lam_min >= lam_max
+    with pytest.raises(
+        ValueError, match="lam_min .* must be strictly less than lam_max"
+    ):
+        plot_band_structure(
+            results, normalize=False, pitch=0.5, lam_min=0.8, lam_max=0.5
+        )
+
+
+def test_plot_band_diagram_alias():
+    """Verifies plot_band_diagram alias works identically to plot_band_structure."""
+    k_pts, labels, indices = get_high_symmetry_kpath("hexagonal", k_density=3)
+    num_k = len(k_pts)
+    freqs = np.array([[0.2, 0.4]] * num_k)
+    results = {"freqs": {"te": freqs}}
+
+    fig = plot_band_diagram(
+        results,
+        labels,
+        indices,
+        normalize=False,
+        pitch=0.6,
+    )
+    ax = fig.axes[0]
+    assert "Wavelength" in ax.get_ylabel()
+    lines = [l for l in ax.get_lines() if l.get_linestyle() in ("None", "none", "")]
+    assert np.isclose(lines[0].get_ydata()[0], 3.0)  # 0.6 / 0.2 = 3.0
+    plt.close(fig)
 
 
 def test_get_epsilon_and_plot(tmp_path):

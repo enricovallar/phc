@@ -24,6 +24,7 @@ from phc_optimization.locus import (
 from phc_optimization.objectives import (
     BaseObjective,
     DiracDegeneracyObjective,
+    ModalOverlapDegeneracyObjective,
     get_objective,
 )
 from phc_optimization.optimizer import BayesianOptimizer
@@ -50,6 +51,7 @@ __all__ = [
     "BaseObjective",
     "BayesianOptimizer",
     "DiracDegeneracyObjective",
+    "ModalOverlapDegeneracyObjective",
     "ObjectiveEvaluation",
     "OptimizationRecord",
     "OptimizationResult",

@@ -84,8 +84,12 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
     results: dict[str, np.ndarray] = {}
     pol = polarization.lower()
     should_compute_fracs = compute_fractions or pol in ("all", "no_parity")
+    compute_symmetries = rest[4] if len(rest) > 4 else False
+    symmetry_group = rest[5] if len(rest) > 5 else "C4v"
+
     te_fracs_chunk: list[list[float]] = []
     confinements_chunk: list[list[float]] = []
+    sym_records_chunk: dict[str, list[dict[str, Any]]] = {}
 
     def _metrics_callback(solver: Any) -> None:
         from phc_mpb.classification import compute_modal_metrics
@@ -102,6 +106,23 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
 
     band_funcs = [_metrics_callback] if should_compute_fracs else []
 
+    def _run_with_callbacks(run_fn: Any, pol_key: str) -> None:
+        callbacks = list(band_funcs)
+        if compute_symmetries:
+
+            def _sym_cb(solver: Any) -> None:
+                if hasattr(solver, "current_k") and solver.current_k.norm() < 1e-4:
+                    from phc_mpb.symmetry import compute_band_symmetries
+
+                    sym_records = compute_band_symmetries(
+                        solver, symmetry_group=symmetry_group
+                    )
+                    sym_records_chunk[pol_key] = sym_records
+
+            callbacks.append(_sym_cb)
+        run_fn(*callbacks)
+        results[pol_key] = np.copy(ms.all_freqs)
+
     # Suppress worker stdout unless verbose is explicitly requested
     from phc_utils import silence_c_stdout
 
@@ -110,25 +131,19 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
     with ctx:
         if dimension == "2D":
             if pol in ("te", "both"):
-                ms.run_te(*band_funcs)
-                results["te"] = np.copy(ms.all_freqs)
+                _run_with_callbacks(ms.run_te, "te")
             if pol in ("tm", "both"):
-                ms.run_tm(*band_funcs)
-                results["tm"] = np.copy(ms.all_freqs)
+                _run_with_callbacks(ms.run_tm, "tm")
             if pol in ("all", "no_parity"):
-                ms.run(*band_funcs)
-                results["all"] = np.copy(ms.all_freqs)
+                _run_with_callbacks(ms.run, "all")
         else:
             # 3D Slab modes
             if pol in ("te_like", "even", "both", "te"):
-                ms.run_zeven(*band_funcs)
-                results["te_like"] = np.copy(ms.all_freqs)
+                _run_with_callbacks(ms.run_zeven, "te_like")
             if pol in ("tm_like", "odd", "both", "tm"):
-                ms.run_zodd(*band_funcs)
-                results["tm_like"] = np.copy(ms.all_freqs)
+                _run_with_callbacks(ms.run_zodd, "tm_like")
             if pol in ("all", "no_parity"):
-                ms.run(*band_funcs)
-                results["all"] = np.copy(ms.all_freqs)
+                _run_with_callbacks(ms.run, "all")
 
     ret: dict[str, Any] = {
         "chunk_idx": chunk_idx,
@@ -137,6 +152,8 @@ def _worker_solve_k_chunk(task_args: tuple[Any, ...]) -> dict[str, Any]:
     if should_compute_fracs and te_fracs_chunk:
         ret["te_fractions"] = np.array(te_fracs_chunk)
         ret["confinements"] = np.array(confinements_chunk)
+    if sym_records_chunk:
+        ret["symmetries"] = sym_records_chunk
     return ret
 
 
@@ -164,6 +181,8 @@ def run_parallel_band_solver(
     ] = "midplane",
     slab_thickness: float | None = None,
     z_center: float = 0.0,
+    compute_symmetries: bool = False,
+    symmetry_group: str = "C4v",
 ) -> dict[str, Any]:
     """Executes MPB band structure calculations in parallel across k-points using multiple worker processes.
 
@@ -312,6 +331,8 @@ def run_parallel_band_solver(
             polarization_method,
             slab_thickness,
             z_center,
+            compute_symmetries,
+            symmetry_group,
         )
         for idx, chunk in enumerate(chunks)
     ]
@@ -405,12 +426,37 @@ def run_parallel_band_solver(
         if guided_list:
             guided_gaps[pol_key] = guided_list
 
+    pol_norm = polarization.lower()
+    if "te_like" in assembled_freqs and pol_norm in ("te", "both"):
+        assembled_freqs["te"] = assembled_freqs["te_like"]
+        if "te_like" in gap_info:
+            gap_info["te"] = gap_info["te_like"]
+        if "te_like" in guided_gaps:
+            guided_gaps["te"] = guided_gaps["te_like"]
+    if "tm_like" in assembled_freqs and pol_norm in ("tm", "both"):
+        assembled_freqs["tm"] = assembled_freqs["tm_like"]
+        if "tm_like" in gap_info:
+            gap_info["tm"] = gap_info["tm_like"]
+        if "tm_like" in guided_gaps:
+            guided_gaps["tm"] = guided_gaps["tm_like"]
+
     # Update ms.all_freqs if an ms instance was passed
     if ms is not None and assembled_freqs:
         # Default primary array to first available polarization
         primary_key = next(iter(assembled_freqs))
         with contextlib.suppress(Exception):
             ms.all_freqs = assembled_freqs[primary_key]
+
+    assembled_symmetries: dict[str, list[dict[str, Any]]] = {}
+    for r in worker_outputs:
+        if "symmetries" in r:
+            for p_k, s_list in r["symmetries"].items():
+                assembled_symmetries[p_k] = s_list
+
+    if "te_like" in assembled_symmetries and pol_norm in ("te", "both"):
+        assembled_symmetries["te"] = assembled_symmetries["te_like"]
+    if "tm_like" in assembled_symmetries and pol_norm in ("tm", "both"):
+        assembled_symmetries["tm"] = assembled_symmetries["tm_like"]
 
     ret: dict[str, Any] = {
         "freqs": assembled_freqs,
@@ -426,5 +472,7 @@ def run_parallel_band_solver(
         ret["te_fractions"] = assembled_te_fracs
     if assembled_confinements is not None:
         ret["confinements"] = assembled_confinements
+    if assembled_symmetries:
+        ret["symmetries"] = assembled_symmetries
 
     return ret

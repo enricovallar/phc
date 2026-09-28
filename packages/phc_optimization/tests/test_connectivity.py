@@ -73,3 +73,26 @@ def test_check_slab_connectivity_type_error() -> None:
     """Verifies TypeError on invalid input type."""
     with pytest.raises(TypeError):
         check_slab_connectivity("invalid_type")
+
+
+def test_check_slab_connectivity_3d_z_zero() -> None:
+    """Verifies that 3D slab connectivity checks the midplane at z=0."""
+    # 3D array: 40x40 in-plane, 16 vertical slices
+    # Midplane iz = 8 has an over-etched hole severing connectivity
+    eps_3d = np.full((40, 40, 16), fill_value=12.0)
+    n = 40
+    y, x = np.ogrid[:n, :n]
+    r = np.hypot(x - n / 2, y - n / 2)
+    # Over-etched hole at z=0 (iz=8) severing boundary
+    eps_3d[:, :, 8] = np.where(r < 22, 1.0, 12.0)
+
+    # Checking midplane (z=0) flags it as disconnected
+    is_conn, _, msg = check_slab_connectivity(eps_3d, z_slice="midplane")
+    assert is_conn is False
+    assert "Disconnected" in msg
+
+    # Connected hole at z=0 (r < 10) survives
+    eps_3d[:, :, 8] = np.where(r < 10, 1.0, 12.0)
+    is_conn, _, msg = check_slab_connectivity(eps_3d, z_slice="midplane")
+    assert is_conn is True
+    assert "Continuous" in msg

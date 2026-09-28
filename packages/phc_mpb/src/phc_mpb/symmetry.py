@@ -21,7 +21,6 @@ from collections.abc import Sequence
 from typing import Any
 
 import meep as mp
-import numpy as np
 
 # Point Group Character Tables & Class Weights
 # Format:
@@ -239,11 +238,18 @@ def compute_band_symmetries(
     )
 
     # Retrieve frequencies at current k-point
-    current_freqs = (
-        list(ms.all_freqs[-1])
-        if hasattr(ms, "all_freqs") and len(ms.all_freqs) > 0
-        else [0.0] * ms.num_bands
-    )
+    current_freqs: list[float] = []
+    if hasattr(ms, "freqs") and len(ms.freqs) > 0:
+        current_freqs = [float(f) for f in ms.freqs]
+    elif hasattr(ms, "get_freqs"):
+        try:
+            current_freqs = [float(f) for f in ms.get_freqs()]
+        except (AttributeError, RuntimeError, TypeError):
+            current_freqs = []
+    if not current_freqs and hasattr(ms, "all_freqs") and len(ms.all_freqs) > 0:
+        current_freqs = [float(f) for f in ms.all_freqs[-1]]
+    if not current_freqs:
+        current_freqs = [0.0] * getattr(ms, "num_bands", len(target_bands))
 
     records: list[dict[str, Any]] = []
     for b in target_bands:
@@ -271,7 +277,175 @@ def compute_band_symmetries(
             }
         )
 
-    return records
+    return resolve_multiplet_symmetries(
+        records, symmetry_group=symmetry_group, gamma_freqs=current_freqs
+    )
+
+
+def _to_complex(val: Any) -> complex:
+    """Converts a scalar or stringified complex representation to complex."""
+    if isinstance(val, (int, float, complex)):
+        return complex(val)
+    val_str = str(val).strip().strip("()")
+    return complex(val_str)
+
+
+def resolve_multiplet_symmetries(
+    records: Sequence[dict[str, Any]],
+    symmetry_group: str = "C6v",
+    degeneracy_tol: float = 0.015,
+    gamma_freqs: Sequence[float] | None = None,
+) -> list[dict[str, Any]]:
+    """Resolves degenerate mode mixing, accidental multiplets, and false singlet irrep assignments.
+
+    In numerical eigensolvers (e.g. MPB), degenerate subspaces (such as 2D E doublets)
+    are returned in arbitrary basis orientations. When evaluated on a single-band basis,
+    reflection characters can take arbitrary values (e.g. +1 and -1), causing false matches
+    with 1D irreps (such as B_1). Furthermore, isolated non-degenerate singlet modes may be
+    falsely assigned to 2D irreps due to raw projection formulas.
+
+    This function:
+    1. Clusters adjacent bands by frequency at Gamma according to `degeneracy_tol`.
+    2. For singlet clusters (size 1), restricts classification to 1D irreducible representations.
+    3. For doublet clusters (size 2), computes basis-invariant subspace trace projections across
+       both bands, assigning both to the matching 2D irrep (e.g. E_1, E_2, or E).
+    4. For accidental triplet clusters (size 3, e.g. E_1 + A_2), partitions the cluster into
+       the candidate singlet and doublet pair that maximizes total subspace projection fidelity.
+
+    Args:
+        records: Sequence of band symmetry dictionaries from compute_band_symmetries.
+        symmetry_group: Point group name ('C4v' or 'C6v'). Default 'C6v'.
+        degeneracy_tol: Relative frequency tolerance (delta_omega / omega) used to cluster
+            nearly degenerate bands (default: 0.015).
+        gamma_freqs: Optional sequence of frequencies at Gamma corresponding to bands.
+
+    Returns:
+        New list of band symmetry dictionaries with resolved irrep labels and subspace confidence scores.
+
+    Raises:
+        ValueError: If symmetry_group is not recognized in CHARACTER_TABLES.
+    """
+    if not records:
+        return []
+
+    if symmetry_group not in CHARACTER_TABLES:
+        raise ValueError(
+            f"Unsupported point group '{symmetry_group}'. Supported groups: {list(CHARACTER_TABLES.keys())}"
+        )
+
+    group_data = CHARACTER_TABLES[symmetry_group]
+    irreps_data = group_data["irreps"]
+
+    out_records = [dict(r) for r in records]
+    if gamma_freqs is not None and len(gamma_freqs) > 0:
+        for r in out_records:
+            b = int(r.get("band", 1))
+            if 0 < b <= len(gamma_freqs):
+                r["freq"] = float(gamma_freqs[b - 1])
+
+    freqs = [float(r.get("freq", 0.0)) for r in out_records]
+    clusters: list[list[int]] = []
+    curr: list[int] = [0]
+    for i in range(1, len(out_records)):
+        f_prev = freqs[curr[-1]]
+        f_curr = freqs[i]
+        denom = max(abs(f_prev), 1e-6)
+        if (
+            abs(f_curr - f_prev) / denom < degeneracy_tol
+            or abs(f_curr - f_prev) < 0.005
+        ):
+            curr.append(i)
+        else:
+            clusters.append(curr)
+            curr = [i]
+    clusters.append(curr)
+
+    out_records = [dict(r) for r in records]
+    for c in clusters:
+        c_recs = [out_records[i] for i in c]
+        if len(c) == 1:
+            # Singlet: strictly 1D irrep (exclude 2D irreps like E, E_1, E_2)
+            r = c_recs[0]
+            projs = r.get("projections", {})
+            p_1d = {
+                k: v
+                for k, v in projs.items()
+                if irreps_data.get(k, {}).get("E", 1) == 1
+            }
+            if p_1d:
+                best = max(p_1d, key=p_1d.get)
+                r["irrep"] = best
+                r["confidence"] = round(float(p_1d[best]), 4)
+        elif len(c) == 2:
+            # Doublet: evaluate subspace trace across both states
+            mults = compute_subspace_trace_projection(
+                c_recs, symmetry_group=symmetry_group
+            )
+            mults_2d = {
+                k: v
+                for k, v in mults.items()
+                if irreps_data.get(k, {}).get("E", 1) == 2
+            }
+            if mults_2d and max(mults_2d.values()) >= 0.5:
+                best_2d = max(mults_2d, key=mults_2d.get)
+                conf = round(float(mults_2d[best_2d]), 4)
+                for r in c_recs:
+                    r["irrep"] = best_2d
+                    r["confidence"] = conf
+        elif len(c) == 3:
+            # Triplet: partition into 1 singlet + 1 doublet
+            best_partition = None
+            best_score = -1.0
+            for s_idx, s_rec in enumerate(c_recs):
+                pair_recs = [r for j, r in enumerate(c_recs) if j != s_idx]
+                p_s = s_rec.get("projections", {})
+                p_s_1d = {
+                    k: v
+                    for k, v in p_s.items()
+                    if irreps_data.get(k, {}).get("E", 1) == 1
+                }
+                s_irrep = max(p_s_1d, key=p_s_1d.get) if p_s_1d else "Unknown"
+                s_score = p_s_1d.get(s_irrep, 0.0)
+
+                mults_p = compute_subspace_trace_projection(
+                    pair_recs, symmetry_group=symmetry_group
+                )
+                mults_2d = {
+                    k: v
+                    for k, v in mults_p.items()
+                    if irreps_data.get(k, {}).get("E", 1) == 2
+                }
+                p_irrep = max(mults_2d, key=mults_2d.get) if mults_2d else "Unknown"
+                p_score = mults_2d.get(p_irrep, 0.0)
+
+                total = s_score + p_score
+                if total > best_score:
+                    best_score = total
+                    best_partition = (
+                        s_idx,
+                        s_irrep,
+                        s_score,
+                        pair_recs,
+                        p_irrep,
+                        p_score,
+                    )
+
+            if best_partition:
+                (
+                    s_idx,
+                    s_irrep,
+                    s_score,
+                    pair_recs,
+                    p_irrep,
+                    p_score,
+                ) = best_partition
+                c_recs[s_idx]["irrep"] = s_irrep
+                c_recs[s_idx]["confidence"] = round(float(s_score), 4)
+                for r in pair_recs:
+                    r["irrep"] = p_irrep
+                    r["confidence"] = round(float(p_score), 4)
+
+    return out_records
 
 
 def compute_subspace_trace_projection(
@@ -310,7 +484,8 @@ def compute_subspace_trace_projection(
         if op == "E":
             continue
         op_sum = sum(
-            r.get("characters", {}).get(op, 0.0 + 0.0j) for r in cluster_records
+            _to_complex(r.get("characters", {}).get(op, 0.0 + 0.0j))
+            for r in cluster_records
         )
         trace_chars[op] = complex(op_sum)
 
@@ -327,98 +502,6 @@ def compute_subspace_trace_projection(
         multiplicities[irrep] = float(max(0.0, mult_val))
 
     return multiplicities
-
-
-def failsafe_irrep_mapping(
-    target_irreps: Sequence[str],
-    degeneracy_tol: float | None,
-    full_irrep_map: dict[int, tuple[str, float, float]],
-    bands_to_check: Sequence[int],
-) -> list[tuple[int, str, float, str]]:
-    """Detects degenerate mode mixing at Gamma and applies failsafe relabeling to target irreps.
-
-    When exact degeneracy occurs, MPB returns arbitrary linear combinations of eigenfunctions,
-    causing low confidence scores or scrambled irrep labels. If a frequency cluster within
-    degeneracy_tol matches the target multiplet, this relabels bands to the expected sequence.
-
-    Args:
-        target_irreps: Sequence of target irrep labels (e.g. ['A_1', 'E', 'E'] or ['A_2', 'E', 'E']).
-        degeneracy_tol: Frequency tolerance delta_omega defining degeneracy. If None, skipped.
-        full_irrep_map: Mutable dict mapping band index to (irrep, confidence, freq).
-        bands_to_check: Sequence of candidate band indices to inspect.
-
-    Returns:
-        List of tuples (band, old_irrep, old_confidence, new_irrep) for each relabeled band.
-    """
-    if degeneracy_tol is None or not target_irreps:
-        return []
-
-    bands_list = list(bands_to_check)
-    freqs = np.array([full_irrep_map[b][2] for b in bands_list])
-    n_targets = len(target_irreps)
-
-    # Pre-check: Skip if already an exact match in order or permutation
-    if len(freqs) >= n_targets:
-        for i in range(len(freqs) - n_targets + 1):
-            is_degenerate = all(
-                abs(freqs[i + k] - freqs[i + k + 1]) < degeneracy_tol
-                for k in range(n_targets - 1)
-            )
-            if is_degenerate:
-                current_irreps = [
-                    full_irrep_map[bands_list[i + k]][0] for k in range(n_targets)
-                ]
-                if sorted(current_irreps) == sorted(target_irreps):
-                    return []
-
-    # Cluster detection and relabeling
-    for i in range(len(freqs) - n_targets + 1):
-        is_cluster = all(
-            abs(freqs[i + k] - freqs[i + k + 1]) < degeneracy_tol
-            for k in range(n_targets - 1)
-        )
-        if is_cluster:
-            cluster_bands = bands_list[i : i + n_targets]
-            cluster_irreps = [full_irrep_map[b][0] for b in cluster_bands]
-            cluster_confs = [full_irrep_map[b][1] for b in cluster_bands]
-
-            cond1 = sorted(cluster_irreps) != sorted(target_irreps)
-            cond2 = sum(c < 0.85 for c in cluster_confs) > (len(cluster_confs) / 2)
-
-            if cond1 and cond2:
-                has_confident_foreign_mode = any(
-                    irrep not in target_irreps and conf >= 0.85
-                    for irrep, conf in zip(cluster_irreps, cluster_confs, strict=False)
-                )
-                if has_confident_foreign_mode:
-                    continue
-
-                e_count_before = sum(
-                    1
-                    for j in range(i)
-                    if full_irrep_map[bands_list[j]][0] is not None
-                    and full_irrep_map[bands_list[j]][0].startswith("E")
-                )
-
-                if e_count_before % 2 == 0:
-                    corrections: list[tuple[int, str, float, str]] = []
-                    for j, target_irrep in enumerate(target_irreps):
-                        target_band = cluster_bands[j]
-                        old_tuple = full_irrep_map[target_band]
-                        old_irrep = old_tuple[0]
-                        old_conf = old_tuple[1]
-                        if old_irrep != target_irrep:
-                            corrections.append(
-                                (target_band, old_irrep, old_conf, target_irrep)
-                            )
-                        full_irrep_map[target_band] = (
-                            target_irrep,
-                            old_tuple[1],
-                            old_tuple[2],
-                        )
-                    return corrections
-
-    return []
 
 
 def find_bands_from_irreps(
@@ -440,7 +523,7 @@ def find_bands_from_irreps(
         target_irreps: Desired irrep labels (e.g. ['A_1', 'E', 'E']).
         irrep_occurrences: 1-based occurrence index for each target irrep (default [1, 1, 1]).
         min_band: Lowest band index to consider (default 2 to skip Band 1 acoustic branch).
-        degeneracy_tol: Frequency threshold for failsafe degenerate relabeling.
+        degeneracy_tol: Frequency threshold for degenerate subspace resolution.
 
     Returns:
         Tuple of:
@@ -453,7 +536,12 @@ def find_bands_from_irreps(
     if not filtered:
         return None, {}, f"No bands found at or above min_band={min_band}.", []
 
-    bands_to_check = [int(r["band"]) for r in filtered]
+    if degeneracy_tol is not None:
+        point_group = str(filtered[0].get("point_group", "C6v"))
+        filtered = resolve_multiplet_symmetries(
+            filtered, symmetry_group=point_group, degeneracy_tol=degeneracy_tol
+        )
+
     full_irrep_map: dict[int, tuple[str, float, float]] = {
         int(r["band"]): (
             str(r["irrep"]),
@@ -462,13 +550,7 @@ def find_bands_from_irreps(
         )
         for r in filtered
     }
-
-    corrections = failsafe_irrep_mapping(
-        target_irreps=target_irreps,
-        degeneracy_tol=degeneracy_tol,
-        full_irrep_map=full_irrep_map,
-        bands_to_check=bands_to_check,
-    )
+    corrections: list[tuple[int, str, float, str]] = []
 
     # Group bands by assigned irrep
     global_bands_by_irrep: dict[str, list[int]] = {}

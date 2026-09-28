@@ -156,6 +156,46 @@ def test_refine_locus_points_synthetic():
     np.testing.assert_allclose(refined_radii, r_target, atol=1e-4)
 
 
+def test_refine_locus_points_parallel():
+    """Verifies that refine_locus_points executes concurrently when num_workers > 1."""
+    r_target = 0.28
+
+    def mock_eval(params: dict[str, float]) -> tuple[float, float, float]:
+        r = np.hypot(params["r1"], params["r2"])
+        gap = r - r_target
+        cost = abs(gap)
+        freq = 0.8 + 0.1 * r
+        return gap, cost, freq
+
+    thetas = np.linspace(0.2, 1.2, 12)
+    r_init = 0.29
+    init_x1 = r_init * np.cos(thetas)
+    init_x2 = r_init * np.sin(thetas)
+
+    locus = {
+        "locus_id": 1,
+        "x1": list(init_x1),
+        "x2": list(init_x2),
+        "fom": [10.0] * 12,
+        "is_closed": False,
+    }
+
+    refined = refine_locus_points(
+        locus=locus,
+        param_names=["r1", "r2"],
+        evaluate_point_fn=mock_eval,
+        tolerance=1e-5,
+        max_steps=8,
+        num_workers=4,
+    )
+
+    assert len(refined["x1"]) == 12
+    for c in refined["costs"]:
+        assert c < 1e-5
+    refined_radii = np.hypot(refined["x1"], refined["x2"])
+    np.testing.assert_allclose(refined_radii, r_target, atol=1e-4)
+
+
 def test_evaluate_locus_group_velocities():
     """Verifies that adjacent-point group velocity evaluation populates locus dictionary."""
     locus = {
@@ -256,9 +296,24 @@ def test_bayesian_optimizer_analyze_locus_runs(tmp_path: Path):
     )
 
     opt.run(show_progress=False)
-    # Call analyze_locus and ensure no TypeError is raised
-    res = opt.analyze_locus(sample_points=5, max_refine_steps=2)
+    # Call analyze_locus and ensure no TypeError is raised and match plots are created
+    res = opt.analyze_locus(
+        sample_points=5,
+        max_refine_steps=2,
+        plot_match_bands=True,
+        k_density_match=6,
+    )
     assert isinstance(res, list)
+    if res:
+        assert "target_match" in res[0]
+        tm = res[0]["target_match"]
+        assert "pitch" in tm
+        assert "r1" in tm
+        assert "r2" in tm
+        assert (tmp_path / "locus_match_band_structure.png").is_file()
+        assert (tmp_path / "locus_match_band_structure_wavelength.png").is_file()
+        assert (tmp_path / "locus_match_epsilon.png").is_file()
+        assert (tmp_path / "locus_match_unit_cell.gds").is_file()
 
 
 def test_evaluate_locus_dirac_frequencies():

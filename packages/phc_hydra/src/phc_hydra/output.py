@@ -6,7 +6,7 @@ and enforces the mandatory inclusion of physical GDS layout masks across all sim
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,7 @@ def resolve_simulation_output_dir(
         solver: Simulation engine name (e.g., 'mpb', 'lumerical').
         sim_type: Simulation task type (e.g., 'band_diagram', 'slab_band_diagram', 'cavity_q').
         geometry: Geometry or unit cell identifier (e.g., 'c6v_primitive', 'l3_cavity').
-        timestamp: Optional formatted timestamp string. Defaults to UTC '%Y-%m-%d_%H-%M-%S'.
+        timestamp: Optional formatted timestamp string. Defaults to local '%Y-%m-%d_%H-%M-%S'.
         base_dir: Root output directory path (default: 'outputs').
         override_dir: Direct path override bypassing the standard hierarchy.
         cfg: Optional Hydra DictConfig or configuration dictionary.
@@ -72,10 +72,10 @@ def resolve_simulation_output_dir(
         if isinstance(cfg_dict, dict) and cfg_dict.get("output_dir"):
             out_path = Path(cfg_dict["output_dir"])
         else:
-            ts = timestamp or datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+            ts = timestamp or datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
             out_path = Path(base_dir) / solver / sim_type / geometry / ts
     else:
-        ts = timestamp or datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+        ts = timestamp or datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
         out_path = Path(base_dir) / solver / sim_type / geometry / ts
 
     out_path.mkdir(parents=True, exist_ok=True)
@@ -185,13 +185,15 @@ class SimulationOutputManager:
             solver: Electromagnetic solver name (default: 'mpb').
             sim_type: Simulation task type (default: 'band_diagram').
             geometry_name: Geometry identifier (default: 'c6v_primitive').
-            timestamp: Optional timestamp string. Defaults to current UTC time.
+            timestamp: Optional timestamp string. Defaults to current local time.
         """
         self.output_dir = Path(output_dir)
         self.solver = solver
         self.sim_type = sim_type
         self.geometry_name = geometry_name
-        self.timestamp = timestamp or datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+        self.timestamp = timestamp or datetime.now().astimezone().strftime(
+            "%Y-%m-%d_%H-%M-%S"
+        )
         self.files: dict[str, Path] = {}
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -401,14 +403,23 @@ class SimulationOutputManager:
                 "sim_type": self.sim_type,
                 "geometry_name": self.geometry_name,
                 "timestamp": self.timestamp,
-                "created_at": datetime.now(UTC).isoformat(),
+                "created_at": datetime.now().astimezone().isoformat(),
             },
         }
         if extra_data:
             summary_payload["extra_data"] = extra_data
 
+        def _json_default(obj: Any) -> Any:
+            if isinstance(obj, complex):
+                return {"real": obj.real, "imag": obj.imag}
+            if hasattr(obj, "tolist"):
+                return obj.tolist()
+            if hasattr(obj, "item"):
+                return obj.item()
+            return str(obj)
+
         with open(target_path, "w", encoding="utf-8") as f:
-            json.dump(summary_payload, f, indent=2)
+            json.dump(summary_payload, f, indent=2, default=_json_default)
 
         self.files["results_json"] = target_path
         return target_path

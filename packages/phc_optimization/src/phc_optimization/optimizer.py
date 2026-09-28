@@ -9,7 +9,7 @@ import json
 import time
 import warnings
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Literal
 
@@ -35,10 +35,14 @@ from phc_mpb import (
 from phc_utils import export_gds, silence_c_stdout
 from skopt import Optimizer
 from skopt.space import Integer, Real
+from tqdm import tqdm
 
 from phc_optimization.analysis import run_substrate_band_comparison
 from phc_optimization.connectivity import check_slab_connectivity
 from phc_optimization.locus import (
+    _assemble_refined_locus,
+    _refine_single_point_secant,
+    compute_curve_normals,
     evaluate_locus_dirac_frequencies,
     evaluate_locus_group_velocities,
     export_loci_to_json,
@@ -227,7 +231,9 @@ def _evaluate_candidate_worker(
         min_neck_width_px,
         objective,
         supercell_z,
-    ) = args
+        substrate_material,
+        substrate_thickness,
+    ) = (args + (None, None))[:18]
 
     # Suppress MPB C-level eigensolver stdout chatter
     mp.verbosity(0)
@@ -260,12 +266,16 @@ def _evaluate_candidate_worker(
                 combined_params.get("thickness", combined_params.get("h", 0.5)),
             )
         )
+        sub_mat = combined_params.get("substrate_material", substrate_material)
+        sub_thick = combined_params.get("substrate_thickness", substrate_thickness)
         mpb_geom = gds_to_mpb_geometry(
             gds_source=component,
             pitch=pitch,
             dimension=dimension,
             slab_thickness=h_val,
             slab_material=matrix_material,
+            substrate_material=sub_mat,
+            substrate_thickness=sub_thick,
             etch_material=background_material,
             geometry_lattice=mpb_lattice,
         )
@@ -354,6 +364,245 @@ def _evaluate_candidate_worker(
     )
 
 
+def _evaluate_locus_gamma_gap_for_pt(
+    pt_params: dict[str, float],
+    solver_ctx: dict[str, Any],
+) -> tuple[float, float, float]:
+    """Helper evaluating signed gap, cost, and Dirac frequency at Gamma for locus refinement."""
+    cell_factory = solver_ctx["cell_factory"]
+    fixed_params = solver_ctx["fixed_params"]
+    supercell_z = solver_ctx["supercell_z"]
+    lattice_type = solver_ctx["lattice_type"]
+    pitch = solver_ctx["pitch"]
+    dimension = solver_ctx["dimension"]
+    substrate_material = solver_ctx["substrate_material"]
+    substrate_thickness = solver_ctx["substrate_thickness"]
+    matrix_material = solver_ctx["matrix_material"]
+    background_material = solver_ctx["background_material"]
+    resolution = solver_ctx["resolution"]
+    num_bands = solver_ctx["num_bands"]
+    objective = solver_ctx["objective"]
+
+    import meep as mp
+
+    mp.verbosity(0)
+
+    combined = {**fixed_params, **pt_params}
+    comp = _instantiate_cell_component(cell_factory, combined)
+    sz_val = float(
+        supercell_z if supercell_z is not None else combined.get("supercell_z", 4.0)
+    )
+    lat = create_lattice(
+        lattice_type=lattice_type,
+        pitch=pitch,
+        dimension=dimension,
+        supercell_z=sz_val,
+    )
+    h_val = float(
+        combined.get(
+            "slab_thickness",
+            combined.get("thickness", combined.get("h", 0.5)),
+        )
+    )
+    sub_mat = combined.get("substrate_material", substrate_material)
+    sub_thick = combined.get("substrate_thickness", substrate_thickness)
+    geom = gds_to_mpb_geometry(
+        gds_source=comp,
+        pitch=pitch,
+        dimension=dimension,
+        slab_thickness=h_val,
+        slab_material=matrix_material,
+        substrate_material=sub_mat,
+        substrate_thickness=sub_thick,
+        etch_material=background_material,
+        geometry_lattice=lat,
+    )
+    default_mat = matrix_material if dimension == "2D" else background_material
+    ms = create_mode_solver(
+        geometry_lattice=lat,
+        geometry=geom,
+        k_points=[mp.Vector3(0, 0, 0)],
+        default_material=default_mat,
+        resolution=resolution,
+        num_bands=num_bands,
+    )
+
+    with silence_c_stdout():
+        pol = getattr(objective, "polarization", "te")
+        compute_syms = not getattr(objective, "bypass_irrep_identification", True)
+        sym_group = getattr(objective, "symmetry_group", "C4v")
+        solver_res = run_band_solver(
+            ms=ms,
+            polarization=pol,
+            dimension=dimension,
+            num_workers=1,
+            compute_symmetries=compute_syms,
+            symmetry_group=sym_group,
+            verbose=False,
+        )
+        obj_eval = objective.evaluate(
+            component=comp,
+            ms=ms,
+            solver_results=solver_res,
+            params=combined,
+        )
+        signed_gap = float(
+            obj_eval.metadata.get(
+                "signed_gap",
+                obj_eval.metadata.get("freq_high", 0.0)
+                - obj_eval.metadata.get("freq_low", 0.0),
+            )
+        )
+        gap_cost = float(obj_eval.metadata.get("raw_cost", obj_eval.cost))
+        dirac_freq = float(
+            obj_eval.metadata.get(
+                "freq_middle",
+                (
+                    obj_eval.metadata.get("freq_high", 0.0)
+                    + obj_eval.metadata.get("freq_low", 0.0)
+                )
+                / 2.0,
+            )
+        )
+        return signed_gap, gap_cost, dirac_freq
+
+
+def _refine_locus_point_worker(
+    task_args: tuple[Any, ...],
+) -> tuple[int, float, float, float, float, float | None, bool]:
+    """Worker entrypoint refining a single locus point along its normal vector."""
+    (
+        idx,
+        x1_val,
+        x2_val,
+        norm_vec,
+        p1_n,
+        p2_n,
+        tolerance,
+        max_steps,
+        step_mag,
+        delta_max,
+        param_bounds,
+        max_residual_gap,
+        solver_ctx,
+    ) = task_args
+
+    def eval_fn(pt: dict[str, float]) -> tuple[float, float, float]:
+        return _evaluate_locus_gamma_gap_for_pt(pt, solver_ctx)
+
+    return _refine_single_point_secant(
+        idx=idx,
+        x1_val=x1_val,
+        x2_val=x2_val,
+        norm_vec=norm_vec,
+        p1_n=p1_n,
+        p2_n=p2_n,
+        evaluate_point_fn=eval_fn,
+        tolerance=tolerance,
+        max_steps=max_steps,
+        step_mag=step_mag,
+        delta_max=delta_max,
+        param_bounds=param_bounds,
+        max_residual_gap=max_residual_gap,
+    )
+
+
+def _evaluate_locus_vg_worker(task_args: tuple[Any, ...]) -> tuple[int, float]:
+    """Worker entrypoint computing group velocity at adjacent k-point for a refined locus point."""
+    idx, pt_params, delta_k, pol, solver_ctx = task_args
+    import meep as mp
+
+    mp.verbosity(0)
+
+    cell_factory = solver_ctx["cell_factory"]
+    fixed_params = solver_ctx["fixed_params"]
+    supercell_z = solver_ctx["supercell_z"]
+    lattice_type = solver_ctx["lattice_type"]
+    pitch = solver_ctx["pitch"]
+    dimension = solver_ctx["dimension"]
+    substrate_material = solver_ctx["substrate_material"]
+    substrate_thickness = solver_ctx["substrate_thickness"]
+    matrix_material = solver_ctx["matrix_material"]
+    background_material = solver_ctx["background_material"]
+    resolution = solver_ctx["resolution"]
+    num_bands = solver_ctx["num_bands"]
+    objective = solver_ctx["objective"]
+
+    combined = {**fixed_params, **pt_params}
+    comp = _instantiate_cell_component(cell_factory, combined)
+    sz_val = float(
+        supercell_z if supercell_z is not None else combined.get("supercell_z", 4.0)
+    )
+    lat = create_lattice(
+        lattice_type=lattice_type,
+        pitch=pitch,
+        dimension=dimension,
+        supercell_z=sz_val,
+    )
+    h_val = float(
+        combined.get(
+            "slab_thickness",
+            combined.get("thickness", combined.get("h", 0.5)),
+        )
+    )
+    sub_mat = combined.get("substrate_material", substrate_material)
+    sub_thick = combined.get("substrate_thickness", substrate_thickness)
+    geom = gds_to_mpb_geometry(
+        gds_source=comp,
+        pitch=pitch,
+        dimension=dimension,
+        slab_thickness=h_val,
+        slab_material=matrix_material,
+        substrate_material=sub_mat,
+        substrate_thickness=sub_thick,
+        etch_material=background_material,
+        geometry_lattice=lat,
+    )
+    default_mat = matrix_material if dimension == "2D" else background_material
+    k_adj = mp.Vector3(delta_k, 0, 0)
+    ms = create_mode_solver(
+        geometry_lattice=lat,
+        geometry=geom,
+        k_points=[k_adj],
+        default_material=default_mat,
+        resolution=resolution,
+        num_bands=num_bands,
+    )
+
+    with silence_c_stdout():
+        solver_res = run_band_solver(
+            ms=ms,
+            polarization=pol,
+            dimension=dimension,
+            compute_group_velocities=True,
+            num_workers=1,
+            verbose=False,
+        )
+        vg_dict = solver_res.get("group_velocities", {})
+        pol_k = pol.lower()
+        actual_k = pol_k
+        if actual_k not in vg_dict:
+            for alias in ("te", "tm", "te_like", "tm_like", "all"):
+                if alias in vg_dict:
+                    actual_k = alias
+                    break
+        if actual_k in vg_dict:
+            vg_arr = vg_dict[actual_k]  # shape (1, num_bands, 3)
+            t_bands = (
+                getattr(objective, "target_bands", None)
+                or getattr(objective, "mode_indices", None)
+                or [max(1, num_bands // 2)]
+            )
+            vgs_list = [
+                float(np.linalg.norm(vg_arr[0, b - 1]))
+                for b in t_bands
+                if b <= vg_arr.shape[1]
+            ]
+            if vgs_list:
+                return idx, float(max(vgs_list))
+    return idx, 0.0
+
+
 class BayesianOptimizer:
     """Bayesian Optimization Controller for Photonic Crystal Design.
 
@@ -377,6 +626,8 @@ class BayesianOptimizer:
         num_bands: int = 8,
         background_material: str = "air",
         matrix_material: str = "si",
+        substrate_material: str | float | Any | None = None,
+        substrate_thickness: float | None = None,
         layer_stack: Any = None,
         enforce_connectivity: bool = False,
         epsilon_threshold: float = 1.1,
@@ -409,6 +660,8 @@ class BayesianOptimizer:
             num_bands: Number of eigenbands to compute at Gamma.
             background_material: Background cladding material key (e.g. 'air').
             matrix_material: Slab / matrix dielectric material key (e.g. 'si').
+            substrate_material: Optional substrate material key (e.g. 'sio2') for 3D slab.
+            substrate_thickness: Optional thickness of substrate layer in micrometers.
             layer_stack: Optional Technology LayerStack for 3D slab extrusion.
             enforce_connectivity: If True, tests dielectric continuity across PBC before solving.
             epsilon_threshold: Permittivity threshold for connectivity check.
@@ -437,6 +690,8 @@ class BayesianOptimizer:
         self.num_bands = int(num_bands)
         self.background_material = background_material
         self.matrix_material = matrix_material
+        self.substrate_material = substrate_material
+        self.substrate_thickness = substrate_thickness
         self.layer_stack = layer_stack
 
         self.enforce_connectivity = enforce_connectivity
@@ -718,7 +973,9 @@ class BayesianOptimizer:
                 "lattice_type": (
                     self.lattice_type
                     if isinstance(self.lattice_type, str)
-                    else getattr(self.lattice_type, "__class__", type(self.lattice_type)).__name__
+                    else getattr(
+                        self.lattice_type, "__class__", type(self.lattice_type)
+                    ).__name__
                 ),
                 "pitch": self.pitch,
                 "dimension": self.dimension,
@@ -766,6 +1023,9 @@ class BayesianOptimizer:
             self.epsilon_threshold,
             self.min_neck_width_px,
             self.objective,
+            self.supercell_z,
+            self.substrate_material,
+            self.substrate_thickness,
         )
         (
             param_dict,
@@ -844,6 +1104,8 @@ class BayesianOptimizer:
                         self.min_neck_width_px,
                         self.objective,
                         self.supercell_z,
+                        self.substrate_material,
+                        self.substrate_thickness,
                     )
                     for x_cand in candidates
                 ]
@@ -973,7 +1235,9 @@ class BayesianOptimizer:
             "lattice_type": (
                 self.lattice_type
                 if isinstance(self.lattice_type, str)
-                else getattr(self.lattice_type, "__class__", type(self.lattice_type)).__name__
+                else getattr(
+                    self.lattice_type, "__class__", type(self.lattice_type)
+                ).__name__
             ),
             "pitch": self.pitch,
             "dimension": self.dimension,
@@ -1018,6 +1282,12 @@ class BayesianOptimizer:
         grid_resolution: int = 64,
         k_density: int = 20,
         num_workers: int = 1,
+        prefix: str = "best",
+        output_dir: Path | str | None = None,
+        pitch: float | None = None,
+        plot_wavelength: bool = True,
+        title_prefix: str = "Optimal",
+        ylim_wavelength: tuple[float, float] | None = None,
     ) -> dict[str, Any]:
         """Runs the best parameter set from the optimization history.
 
@@ -1028,7 +1298,7 @@ class BayesianOptimizer:
         Args:
             plot_eps: Whether to render and return the permittivity figure.
             plot_bands: Whether to solve dispersion and render the band structure.
-            save_plots: If True, saves figures to `self.output_dir`.
+            save_plots: If True, saves figures to target directory.
             best_params: Optional explicit parameter overrides. If None, resolves
                 the highest FOM candidate from `self.records`.
             rectify: Whether to rectify non-orthogonal unit cells for epsilon plotting.
@@ -1036,6 +1306,12 @@ class BayesianOptimizer:
             grid_resolution: Resolution (pixels per pitch) for the epsilon grid.
             k_density: Interpolation density between high-symmetry k-points.
             num_workers: Number of parallel worker processes for the band solve.
+            prefix: Filename prefix for saved plots and layout (default: 'best').
+            output_dir: Optional custom destination folder overriding self.output_dir.
+            pitch: Physical lattice pitch constant in micrometers for wavelength scaling.
+            plot_wavelength: Whether to render physical wavelength band structure when pitch is set.
+            title_prefix: Label prefix for plot figure titles (default: 'Optimal').
+            ylim_wavelength: Optional manual y-axis limits (um) for wavelength band plot.
 
         Returns:
             Dictionary containing:
@@ -1046,11 +1322,17 @@ class BayesianOptimizer:
                 - "solver_results": Band dispersion results dictionary.
                 - "fig_eps": Permittivity Matplotlib Figure (or None).
                 - "fig_bands": Band diagram Matplotlib Figure (or None).
+                - "fig_bands_wavelength": Wavelength band diagram Figure (or None).
+                - "pitch": Physical pitch constant if computed.
         """
         if not self.records and best_params is None:
             raise RuntimeError(
                 "No evaluations found. Call opt.run() first or provide `best_params`."
             )
+
+        target_dir = Path(output_dir) if output_dir is not None else self.output_dir
+        if save_plots:
+            target_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Resolve optimal parameters
         if best_params is None:
@@ -1067,6 +1349,12 @@ class BayesianOptimizer:
 
         # 2. Build GDS layout and MPB geometry
         component = _instantiate_cell_component(self.cell_factory, params)
+        if save_plots:
+            gds_filename = (
+                "unit_cell.gds" if prefix == "best" else f"{prefix}_unit_cell.gds"
+            )
+            export_gds(component, target_dir / gds_filename, overwrite=True)
+
         sz_val = float(params.get("supercell_z", self.supercell_z))
         mpb_lattice = create_lattice(
             lattice_type=self.lattice_type,
@@ -1080,12 +1368,16 @@ class BayesianOptimizer:
                 params.get("thickness", params.get("h", 0.5)),
             )
         )
+        sub_mat = params.get("substrate_material", self.substrate_material)
+        sub_thick = params.get("substrate_thickness", self.substrate_thickness)
         mpb_geom = gds_to_mpb_geometry(
             gds_source=component,
             pitch=self.pitch,
             dimension=self.dimension,
             slab_thickness=h_val,
             slab_material=self.matrix_material,
+            substrate_material=sub_mat,
+            substrate_thickness=sub_thick,
             etch_material=self.background_material,
             geometry_lattice=mpb_lattice,
         )
@@ -1121,17 +1413,23 @@ class BayesianOptimizer:
 
         fig_eps = None
         if plot_eps:
-            eps_path = self.output_dir / "best_epsilon.png" if save_plots else None
+            eps_path = target_dir / f"{prefix}_epsilon.png" if save_plots else None
             param_str = ", ".join(f"{k}={v:.4f}" for k, v in params.items())
             fig_eps = plot_epsilon(
                 epsilon=eps_array,
-                title=f"Optimal Dielectric Profile ({param_str})",
+                title=f"{title_prefix} Dielectric Profile ({param_str})",
                 save_path=eps_path,
             )
 
         # 6. Compute band structure and render band diagram
         fig_bands = None
+        fig_bands_wl = None
         solver_res: dict[str, Any] = {}
+        eff_pitch = (
+            pitch
+            if pitch is not None
+            else params.get("pitch", getattr(self, "pitch", None))
+        )
         if plot_bands:
             pol = getattr(self.objective, "polarization", "te")
             with silence_c_stdout():
@@ -1143,16 +1441,34 @@ class BayesianOptimizer:
                 )
 
             bands_path = (
-                self.output_dir / "best_band_structure.png" if save_plots else None
+                target_dir / f"{prefix}_band_structure.png" if save_plots else None
             )
             param_str = ", ".join(f"{k}={v:.4f}" for k, v in params.items())
             fig_bands = plot_band_structure(
                 results=solver_res,
                 node_labels=k_labels,
                 node_indices=k_indices,
-                title=f"Optimal Photonic Band Structure ({param_str})",
+                title=f"{title_prefix} Photonic Band Structure ({param_str})",
                 save_path=bands_path,
             )
+
+            if plot_wavelength and eff_pitch is not None and eff_pitch > 0:
+                wl_path = (
+                    target_dir / f"{prefix}_band_structure_wavelength.png"
+                    if save_plots
+                    else None
+                )
+                title_wl = f"{title_prefix} Photonic Band Structure ({param_str}, a={eff_pitch * 1000.0:.1f}nm)"
+                fig_bands_wl = plot_band_structure(
+                    results=solver_res,
+                    node_labels=k_labels,
+                    node_indices=k_indices,
+                    normalize=False,
+                    pitch=eff_pitch,
+                    ylim=ylim_wavelength,
+                    title=title_wl,
+                    save_path=wl_path,
+                )
 
         return {
             "params": params,
@@ -1162,6 +1478,8 @@ class BayesianOptimizer:
             "solver_results": solver_res,
             "fig_eps": fig_eps,
             "fig_bands": fig_bands,
+            "fig_bands_wavelength": fig_bands_wl,
+            "pitch": eff_pitch,
         }
 
     def analyze_locus(
@@ -1184,8 +1502,12 @@ class BayesianOptimizer:
         num_bands_substrate: int | None = None,
         plot_profile: bool = True,
         plot_dirac_freq: bool = True,
+        plot_match_bands: bool = True,
+        k_density_match: int = 20,
         save_artifacts: bool = True,
         verbose: bool = True,
+        num_workers: int | None = None,
+        show_progress: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Extracts, refines, and characterizes optimal 1D degeneracy manifolds.
 
@@ -1194,7 +1516,8 @@ class BayesianOptimizer:
         to exact degeneracy using fast Gamma-only 1D secant line searches, computes group
         velocities at an adjacent k-point k = (delta_k, 0, 0), renders a 3-panel locus
         profile figure and a 2-panel Dirac frequency figure, and saves tabular CSV / JSON manifests.
-        Optionally executes comparative band structure analysis on a SiO₂ substrate at the target point.
+        Optionally executes comparative band structure analysis on a SiO₂ substrate at the target point,
+        and solves/plots full dispersion diagrams for the closest target design match.
 
         Args:
             max_loci: Maximum number of distinct locus ridges to extract (defaults to 1).
@@ -1209,10 +1532,14 @@ class BayesianOptimizer:
             target_wavelength: Desired operating wavelength in micrometers (default: 1.55).
             target_thickness: Desired physical slab thickness in micrometers (default: slab_thickness).
             target_frequency: Optional direct normalized Dirac frequency target override.
+            target_wavelength_nm: Desired physical wavelength in nanometers.
+            target_thickness_nm: Desired physical slab thickness in nanometers.
             compare_substrate: If True, computes and renders an Air vs SiO₂ substrate band diagram comparison.
             num_bands_substrate: Number of eigenbands for the substrate solve (default: 2.5 * num_bands).
             plot_profile: If True, renders and saves a 3-panel locus profile plot.
             plot_dirac_freq: If True, renders and saves a 2-panel Dirac frequency analysis plot.
+            plot_match_bands: If True, solves and plots full band diagrams (normalized & wavelength) for closest match.
+            k_density_match: Interpolation density between k-points for closest match band solve.
             save_artifacts: If True, saves locus_points.csv, locus figures, and optimal_loci.json.
             verbose: Whether to print progress information to stdout.
 
@@ -1302,12 +1629,16 @@ class BayesianOptimizer:
                     combined.get("thickness", combined.get("h", 0.5)),
                 )
             )
+            sub_mat = combined.get("substrate_material", self.substrate_material)
+            sub_thick = combined.get("substrate_thickness", self.substrate_thickness)
             geom = gds_to_mpb_geometry(
                 gds_source=comp,
                 pitch=self.pitch,
                 dimension=self.dimension,
                 slab_thickness=h_val,
                 slab_material=self.matrix_material,
+                substrate_material=sub_mat,
+                substrate_thickness=sub_thick,
                 etch_material=self.background_material,
                 geometry_lattice=lat,
             )
@@ -1408,27 +1739,119 @@ class BayesianOptimizer:
                 return 0.0
 
         bounds_dict = {p.name: p.bounds for p in self.param_specs}
+        effective_workers = num_workers if num_workers is not None else self.num_workers
+        progress_enabled = (
+            self.show_progress
+            if show_progress is None and hasattr(self, "show_progress")
+            else (True if show_progress is None else bool(show_progress))
+        )
+        solver_ctx = {
+            "cell_factory": self.cell_factory,
+            "fixed_params": self.fixed_params,
+            "supercell_z": self.supercell_z,
+            "lattice_type": self.lattice_type,
+            "pitch": self.pitch,
+            "dimension": self.dimension,
+            "substrate_material": self.substrate_material,
+            "substrate_thickness": self.substrate_thickness,
+            "matrix_material": self.matrix_material,
+            "background_material": self.background_material,
+            "resolution": self.resolution,
+            "num_bands": self.num_bands,
+            "objective": self.objective,
+        }
 
         for locus in loci:
             l_id = locus["locus_id"]
+            n_pts = len(locus["x1"])
             if verbose:
-                print(f"Processing Locus #{l_id} ({len(locus['x1'])} points)...")
+                print(f"Processing Locus #{l_id} ({n_pts} points)...")
 
             if refine:
-                if verbose:
-                    print(
-                        f"  Refining Locus #{l_id} at Gamma (tol={refine_tolerance:.1e})..."
+                if effective_workers > 1 and n_pts > 1:
+                    if verbose:
+                        print(
+                            f"  Refining Locus #{l_id} at Gamma in parallel ({effective_workers} workers, tol={refine_tolerance:.1e})..."
+                        )
+                    x1_pts = np.asarray(locus["x1"], dtype=float)
+                    x2_pts = np.asarray(locus["x2"], dtype=float)
+                    locus["x1_unrefined"] = list(x1_pts)
+                    locus["x2_unrefined"] = list(x2_pts)
+                    normals = compute_curve_normals(x1_pts, x2_pts)
+                    p1_n = self.param_names[0] if len(self.param_names) >= 1 else "x1"
+                    p2_n = self.param_names[1] if len(self.param_names) >= 2 else "x2"
+
+                    tasks = [
+                        (
+                            i,
+                            float(x1_pts[i]),
+                            float(x2_pts[i]),
+                            normals[i],
+                            p1_n,
+                            p2_n,
+                            refine_tolerance,
+                            max_refine_steps,
+                            0.002,  # step_mag
+                            0.035,  # delta_max
+                            bounds_dict,
+                            max_residual_gap,
+                            solver_ctx,
+                        )
+                        for i in range(n_pts)
+                    ]
+                    with ProcessPoolExecutor(
+                        max_workers=min(effective_workers, n_pts)
+                    ) as executor:
+                        futures = [
+                            executor.submit(_refine_locus_point_worker, t)
+                            for t in tasks
+                        ]
+                        point_results = []
+                        with tqdm(
+                            total=n_pts,
+                            desc=f"Refining Locus #{l_id}",
+                            unit="pt",
+                            disable=not progress_enabled,
+                        ) as pbar:
+                            for fut in as_completed(futures):
+                                point_results.append(fut.result())
+                                pbar.update(1)
+
+                    point_results.sort(key=lambda r: r[0])
+                    r1_ref = [r[1] for r in point_results]
+                    r2_ref = [r[2] for r in point_results]
+                    gaps_ref = [r[3] for r in point_results]
+                    costs_ref = [r[4] for r in point_results]
+                    freqs_ref = [r[5] for r in point_results]
+                    is_valid_list = [r[6] for r in point_results]
+
+                    _assemble_refined_locus(
+                        locus=locus,
+                        r1_ref=r1_ref,
+                        r2_ref=r2_ref,
+                        gaps_ref=gaps_ref,
+                        costs_ref=costs_ref,
+                        freqs_ref=freqs_ref,
+                        is_valid_list=is_valid_list,
+                        n_pts=n_pts,
+                        exclude_unrefined=exclude_unrefined,
                     )
-                refine_locus_points(
-                    locus=locus,
-                    param_names=self.param_names,
-                    evaluate_point_fn=_evaluate_gamma_gap,
-                    tolerance=refine_tolerance,
-                    max_steps=max_refine_steps,
-                    exclude_unrefined=exclude_unrefined,
-                    max_residual_gap=max_residual_gap,
-                    param_bounds=bounds_dict,
-                )
+                else:
+                    if verbose:
+                        print(
+                            f"  Refining Locus #{l_id} at Gamma (tol={refine_tolerance:.1e})..."
+                        )
+                    refine_locus_points(
+                        locus=locus,
+                        param_names=self.param_names,
+                        evaluate_point_fn=_evaluate_gamma_gap,
+                        tolerance=refine_tolerance,
+                        max_steps=max_refine_steps,
+                        exclude_unrefined=exclude_unrefined,
+                        max_residual_gap=max_residual_gap,
+                        param_bounds=bounds_dict,
+                        show_progress=progress_enabled,
+                    )
 
             if not locus.get("dirac_frequency"):
                 if verbose:
@@ -1437,17 +1860,57 @@ class BayesianOptimizer:
                     locus=locus,
                     param_names=self.param_names,
                     compute_freq_fn=_evaluate_gamma_freq,
+                    show_progress=progress_enabled,
                 )
 
-            if verbose:
-                print(
-                    f"  Evaluating group velocity at adjacent point delta_k={delta_k}..."
+            x1_refined = locus["x1"]
+            x2_refined = locus["x2"]
+            n_ref = len(x1_refined)
+            if effective_workers > 1 and n_ref > 1:
+                if verbose:
+                    print(
+                        f"  Evaluating group velocity at adjacent point delta_k={delta_k} in parallel ({effective_workers} workers)..."
+                    )
+                p1_n = self.param_names[0] if len(self.param_names) >= 1 else "x1"
+                p2_n = self.param_names[1] if len(self.param_names) >= 2 else "x2"
+                vg_tasks = [
+                    (i, {p1_n: float(r1), p2_n: float(r2)}, delta_k, pol, solver_ctx)
+                    for i, (r1, r2) in enumerate(
+                        zip(x1_refined, x2_refined, strict=False)
+                    )
+                ]
+                with ProcessPoolExecutor(
+                    max_workers=min(effective_workers, len(vg_tasks))
+                ) as executor:
+                    futures = [
+                        executor.submit(_evaluate_locus_vg_worker, t) for t in vg_tasks
+                    ]
+                    vg_results = []
+                    with tqdm(
+                        total=len(vg_tasks),
+                        desc=f"Evaluating v_g #{l_id}",
+                        unit="pt",
+                        disable=not progress_enabled,
+                    ) as pbar:
+                        for fut in as_completed(futures):
+                            vg_results.append(fut.result())
+                            pbar.update(1)
+
+                vg_results.sort(key=lambda x: x[0])
+                vgs_clean = [float(r[1]) for r in vg_results]
+                locus["group_velocity"] = vgs_clean
+                locus["vg"] = list(vgs_clean)
+            else:
+                if verbose:
+                    print(
+                        f"  Evaluating group velocity at adjacent point delta_k={delta_k}..."
+                    )
+                evaluate_locus_group_velocities(
+                    locus=locus,
+                    param_names=self.param_names,
+                    compute_vg_fn=_evaluate_adjacent_vg,
+                    show_progress=progress_enabled,
                 )
-            evaluate_locus_group_velocities(
-                locus=locus,
-                param_names=self.param_names,
-                compute_vg_fn=_evaluate_adjacent_vg,
-            )
 
             if save_artifacts:
                 locus_dir = self.output_dir / f"locus_{l_id:02d}"
@@ -1514,6 +1977,95 @@ class BayesianOptimizer:
                         "output_path": str(sub_res.get("output_path", "")),
                         "target_frequency": sub_res.get("target_frequency"),
                     }
+
+                if plot_match_bands:
+                    try:
+                        h_val = float(
+                            self.fixed_params.get(
+                                "slab_thickness",
+                                self.fixed_params.get(
+                                    "thickness",
+                                    self.fixed_params.get("h", 0.5),
+                                ),
+                            )
+                        )
+                        _opt_idx, match_meta = find_target_locus_point(
+                            locus=locus,
+                            target_wavelength=target_wavelength,
+                            target_thickness=target_thickness,
+                            target_frequency=target_frequency,
+                            target_wavelength_nm=target_wavelength_nm,
+                            target_thickness_nm=target_thickness_nm,
+                            slab_thickness=h_val,
+                            pitch=self.pitch,
+                        )
+                        p1_n = locus.get("p1_name", self.param_names[0])
+                        p2_n = locus.get("p2_name", self.param_names[1])
+                        match_params = {
+                            p1_n: match_meta[p1_n],
+                            p2_n: match_meta[p2_n],
+                        }
+                        if verbose:
+                            print(
+                                f"  Plotting full band diagram for closest locus match #{l_id} "
+                                f"({p1_n}={match_params[p1_n]:.4f}, {p2_n}={match_params[p2_n]:.4f}, "
+                                f"pitch={match_meta['pitch_nm']:.1f}nm, lambda={match_meta['target_wavelength_nm']:.1f}nm)..."
+                            )
+                        target_lam_um = float(match_meta["target_wavelength"])
+                        ylim_wl = (target_lam_um * 0.7, target_lam_um * 1.4)
+                        _match_res = self.run_best(
+                            plot_eps=True,
+                            plot_bands=True,
+                            save_plots=save_artifacts,
+                            best_params=match_params,
+                            prefix=f"locus_{l_id:02d}_match",
+                            output_dir=locus_dir if save_artifacts else None,
+                            num_workers=effective_workers,
+                            pitch=match_meta["pitch"],
+                            plot_wavelength=True,
+                            title_prefix=f"Locus #{l_id} Match",
+                            ylim_wavelength=ylim_wl,
+                            k_density=k_density_match,
+                        )
+                        match_meta["files"] = {
+                            "band_structure": f"locus_{l_id:02d}_match_band_structure.png",
+                            "band_structure_wavelength": f"locus_{l_id:02d}_match_band_structure_wavelength.png",
+                            "epsilon": f"locus_{l_id:02d}_match_epsilon.png",
+                            "unit_cell_gds": f"locus_{l_id:02d}_match_unit_cell.gds",
+                        }
+                        locus["target_match"] = match_meta
+
+                        # Copy canonical locus match artifacts to main output directory if first locus
+                        if save_artifacts and l_id == 1:
+                            import shutil
+
+                            for src_name, dst_name in [
+                                (
+                                    f"locus_{l_id:02d}_match_band_structure.png",
+                                    "locus_match_band_structure.png",
+                                ),
+                                (
+                                    f"locus_{l_id:02d}_match_band_structure_wavelength.png",
+                                    "locus_match_band_structure_wavelength.png",
+                                ),
+                                (
+                                    f"locus_{l_id:02d}_match_epsilon.png",
+                                    "locus_match_epsilon.png",
+                                ),
+                                (
+                                    f"locus_{l_id:02d}_match_unit_cell.gds",
+                                    "locus_match_unit_cell.gds",
+                                ),
+                            ]:
+                                src_f = locus_dir / src_name
+                                dst_f = self.output_dir / dst_name
+                                if src_f.exists():
+                                    shutil.copy2(src_f, dst_f)
+                    except (ValueError, RuntimeError, KeyError) as e:
+                        if verbose:
+                            print(
+                                f"  Warning: Could not compute locus match band structure: {e}"
+                            )
 
         if save_artifacts and loci:
             export_loci_to_json(loci, self.output_dir / "optimal_loci.json")

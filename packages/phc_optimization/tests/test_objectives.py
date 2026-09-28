@@ -62,3 +62,87 @@ def test_dirac_degeneracy_target_cost_clamp() -> None:
         component, ms=None, solver_results=solver_results, params={}
     )
     assert eval_res.cost == 0.01
+
+
+def test_modal_overlap_degeneracy_evaluation() -> None:
+    """Verifies modal overlap degeneracy objective with synthetic reference fields."""
+    nx, ny, nz = 8, 8, 4
+    # Create 3 orthogonal reference modes
+    f1 = np.zeros((nx, ny, nz, 3), dtype=complex)
+    f2 = np.zeros((nx, ny, nz, 3), dtype=complex)
+    f3 = np.zeros((nx, ny, nz, 3), dtype=complex)
+    f1[2, 2, :, 0] = 1.0
+    f2[4, 4, :, 0] = 1.0
+    f3[6, 6, :, 0] = 1.0
+
+    ref_fields = {
+        16: (f1, f1),
+        17: (f2, f2),
+        18: (f3, f3),
+    }
+    ref_freqs = {16: 0.865, 17: 0.865, 18: 0.865}
+
+    obj = get_objective(
+        "modal_overlap_degeneracy",
+        ref_fields=ref_fields,
+        ref_frequencies=ref_freqs,
+        ref_bands=[16, 17, 18],
+        slab_thickness=None,
+        target_cost=0.0001,
+    )
+
+    # In target solver, mode order is slightly permuted or split:
+    # Target band 10 matches ref 18, 11 matches ref 17, 12 matches ref 16
+    t_fields = {
+        10: (f3, f3),
+        11: (f2, f2),
+        12: (f1, f1),
+        13: (
+            np.ones((nx, ny, nz, 3), dtype=complex),
+            np.ones((nx, ny, nz, 3), dtype=complex),
+        ),
+    }
+
+    # Dummy ModeSolver mock or container for get_efield/get_dfield
+    class MockModeSolver:
+        def __init__(self) -> None:
+            self.num_bands = 13
+            self.all_freqs = [[0.0] * 13]
+
+        def get_efield(self, band: int) -> np.ndarray:
+            return t_fields.get(band, (np.zeros((nx, ny, nz, 3), dtype=complex), None))[
+                0
+            ]
+
+        def get_dfield(self, band: int) -> np.ndarray:
+            return t_fields.get(band, (None, np.zeros((nx, ny, nz, 3), dtype=complex)))[
+                1
+            ]
+
+    ms_tar = MockModeSolver()
+    component = gf.Component()
+    # Target frequencies: band 10 = 0.870, band 11 = 0.865, band 12 = 0.860
+    gamma_freqs = [0.0] * 9 + [0.870, 0.865, 0.860, 0.900]
+    solver_results = {"freqs": {"te": [gamma_freqs]}}
+
+    eval_res = obj.evaluate(
+        component=component,
+        ms=ms_tar,
+        solver_results=solver_results,
+        params={"pitch": 0.381},
+    )
+
+    assert not eval_res.is_penalty
+    # Should identify bands 10, 11, 12 as top matching modes
+    tracked = sorted(eval_res.metadata["target_bands"])
+    assert tracked == [10, 11, 12]
+    # Frequencies: low=0.860, mid=0.865, high=0.870
+    assert abs(eval_res.metadata["freq_high"] - 0.870) < 1e-6
+    assert abs(eval_res.metadata["freq_middle"] - 0.865) < 1e-6
+    assert abs(eval_res.metadata["freq_low"] - 0.860) < 1e-6
+    # raw_cost = 0.010
+    assert abs(eval_res.metadata["raw_cost"] - 0.010) < 1e-6
+    # signed_gap = (0.870 - 0.865) - (0.865 - 0.860) = 0.0
+    assert abs(eval_res.metadata["signed_gap"]) < 1e-6
+    # Overlap should be ~1.0
+    assert eval_res.metadata["mean_overlap"] > 0.99

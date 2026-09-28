@@ -14,12 +14,14 @@ Algorithms:
 
 import csv
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import scipy.ndimage as ndi
 from scipy.interpolate import splev, splprep
+from tqdm import tqdm
 
 
 def zhang_suen_thinning(image: np.ndarray) -> np.ndarray:
@@ -554,57 +556,22 @@ def extract_optimal_loci(
     return loci_results
 
 
-def refine_locus_points(
-    locus: dict[str, Any],
-    param_names: list[str],
-    evaluate_point_fn: Callable[[dict[str, float]], tuple[float, float]],
+def _refine_single_point_secant(
+    idx: int,
+    x1_val: float,
+    x2_val: float,
+    norm_vec: np.ndarray,
+    p1_n: str,
+    p2_n: str,
+    evaluate_point_fn: Callable[..., Any],
     tolerance: float = 1e-5,
     max_steps: int = 8,
-    exclude_unrefined: bool = True,
-    max_residual_gap: float = 1e-4,
-    param_bounds: dict[str, tuple[float, float]] | None = None,
     step_mag: float = 0.002,
     delta_max: float = 0.035,
-) -> dict[str, Any]:
-    """Refines sampled locus points to exact degeneracy using a 1D normal line search.
-
-    For each point along the extracted locus, computes the perpendicular normal vector
-    to the curve trajectory and performs a 1D secant root-finding search along the normal
-    vector until the frequency gap cost between target bands drops below `tolerance`.
-
-    Args:
-        locus: Locus dictionary containing 'x1' and 'x2' coordinate lists.
-        param_names: List of parameter names (e.g. ['r1', 'r2']).
-        evaluate_point_fn: Callable returning (signed_gap, cost) for a given parameter dictionary.
-        tolerance: Target cost threshold (e.g. 1e-5) defining exact degeneracy.
-        max_steps: Maximum secant iterations per point.
-        exclude_unrefined: Whether to prune points that cannot reach max_residual_gap.
-        max_residual_gap: Cutoff cost above which unrefined points are flagged or pruned.
-        param_bounds: Optional parameter bounds dict for clipping coordinate proposals.
-        step_mag: Initial probing displacement along the normal vector.
-        delta_max: Maximum allowed displacement from the initial spline point.
-
-    Returns:
-        Refined locus dictionary with updated 'x1', 'x2', 'residual_gap', 'costs',
-        and preserved 'x1_unrefined', 'x2_unrefined'.
-    """
-    x1_pts = np.asarray(locus["x1"], dtype=float)
-    x2_pts = np.asarray(locus["x2"], dtype=float)
-    n_pts = len(x1_pts)
-
-    locus["x1_unrefined"] = list(x1_pts)
-    locus["x2_unrefined"] = list(x2_pts)
-
-    normals = compute_curve_normals(x1_pts, x2_pts)
-    p1_n = param_names[0] if len(param_names) >= 1 else "x1"
-    p2_n = param_names[1] if len(param_names) >= 2 else "x2"
-
-    r1_ref = []
-    r2_ref = []
-    gaps_ref = []
-    costs_ref = []
-    freqs_ref = []
-    is_valid_list = []
+    param_bounds: dict[str, tuple[float, float]] | None = None,
+    max_residual_gap: float = 1e-4,
+) -> tuple[int, float, float, float, float, float | None, bool]:
+    """Refines a single locus point using a 1D secant root-search along its normal vector."""
 
     def _call_eval(pt: dict[str, float]) -> tuple[float, float, float | None]:
         res = evaluate_point_fn(pt)
@@ -613,105 +580,119 @@ def refine_locus_points(
         f = float(res[2]) if len(res) > 2 else None
         return g, c, f
 
-    for i in range(n_pts):
-        norm_vec = normals[i]
-        p_init = {p1_n: float(x1_pts[i]), p2_n: float(x2_pts[i])}
+    p_init = {p1_n: float(x1_val), p2_n: float(x2_val)}
 
-        def _get_coords(
-            delta: float,
-            base_p: dict[str, float] = p_init,
-            n_v: np.ndarray = norm_vec,
-        ) -> dict[str, float]:
-            cur = {
-                p1_n: float(base_p[p1_n] + delta * n_v[0]),
-                p2_n: float(base_p[p2_n] + delta * n_v[1]),
-            }
-            if param_bounds:
-                if p1_n in param_bounds:
-                    b1 = param_bounds[p1_n]
-                    cur[p1_n] = float(np.clip(cur[p1_n], b1[0], b1[1]))
-                if p2_n in param_bounds:
-                    b2 = param_bounds[p2_n]
-                    cur[p2_n] = float(np.clip(cur[p2_n], b2[0], b2[1]))
-            return cur
+    def _get_coords(
+        delta: float,
+        base_p: dict[str, float] = p_init,
+        n_v: np.ndarray = norm_vec,
+    ) -> dict[str, float]:
+        cur = {
+            p1_n: float(base_p[p1_n] + delta * n_v[0]),
+            p2_n: float(base_p[p2_n] + delta * n_v[1]),
+        }
+        if param_bounds:
+            if p1_n in param_bounds:
+                b1 = param_bounds[p1_n]
+                cur[p1_n] = float(np.clip(cur[p1_n], b1[0], b1[1]))
+            if p2_n in param_bounds:
+                b2 = param_bounds[p2_n]
+                cur[p2_n] = float(np.clip(cur[p2_n], b2[0], b2[1]))
+        return cur
 
-        # Step 0: delta = 0
-        gap0, cost0, freq0 = _call_eval(_get_coords(0.0))
-        best_p = _get_coords(0.0)
-        best_gap = gap0
-        best_cost = cost0
-        best_freq = freq0
+    # Step 0: delta = 0
+    gap0, cost0, freq0 = _call_eval(_get_coords(0.0))
+    best_p = _get_coords(0.0)
+    best_gap = gap0
+    best_cost = cost0
+    best_freq = freq0
 
-        if cost0 >= tolerance:
-            # Probe positive
-            gap_pos, cost_pos, freq_pos = _call_eval(_get_coords(step_mag))
-            if cost_pos < best_cost:
-                best_p = _get_coords(step_mag)
-                best_gap = gap_pos
-                best_cost = cost_pos
-                best_freq = freq_pos
+    if cost0 >= tolerance:
+        # Probe positive
+        gap_pos, cost_pos, freq_pos = _call_eval(_get_coords(step_mag))
+        if cost_pos < best_cost:
+            best_p = _get_coords(step_mag)
+            best_gap = gap_pos
+            best_cost = cost_pos
+            best_freq = freq_pos
 
-            if cost_pos >= tolerance:
-                if cost_pos >= cost0 or cost_pos >= 0.99:
-                    gap_neg, cost_neg, freq_neg = _call_eval(_get_coords(-step_mag))
-                    if cost_neg < best_cost:
-                        best_p = _get_coords(-step_mag)
-                        best_gap = gap_neg
-                        best_cost = cost_neg
-                        best_freq = freq_neg
-                    deltas = [0.0, -step_mag]
-                    gaps = [gap0, gap_neg]
-                    costs = [cost0, cost_neg]
+        if cost_pos >= tolerance:
+            if cost_pos >= cost0 or cost_pos >= 0.99:
+                gap_neg, cost_neg, freq_neg = _call_eval(_get_coords(-step_mag))
+                if cost_neg < best_cost:
+                    best_p = _get_coords(-step_mag)
+                    best_gap = gap_neg
+                    best_cost = cost_neg
+                    best_freq = freq_neg
+                deltas = [0.0, -step_mag]
+                gaps = [gap0, gap_neg]
+                costs = [cost0, cost_neg]
+            else:
+                deltas = [0.0, step_mag]
+                gaps = [gap0, gap_pos]
+                costs = [cost0, cost_pos]
+
+            # Secant loop
+            for _step in range(2, max(4, max_steps)):
+                d_prev, d_curr = deltas[-2], deltas[-1]
+                g_prev, g_curr = gaps[-2], gaps[-1]
+                denom = g_curr - g_prev
+                if abs(denom) < 1e-10:
+                    d_next = d_curr + (
+                        step_mag * 0.5 if _step % 2 == 0 else -step_mag * 0.5
+                    )
                 else:
-                    deltas = [0.0, step_mag]
-                    gaps = [gap0, gap_pos]
-                    costs = [cost0, cost_pos]
+                    d_next = d_curr - g_curr * (d_curr - d_prev) / denom
 
-                # Secant loop
-                for _step in range(2, max(4, max_steps)):
-                    d_prev, d_curr = deltas[-2], deltas[-1]
-                    g_prev, g_curr = gaps[-2], gaps[-1]
-                    denom = g_curr - g_prev
-                    if abs(denom) < 1e-10:
-                        d_next = d_curr + (
-                            step_mag * 0.5 if _step % 2 == 0 else -step_mag * 0.5
+                d_next = float(np.clip(d_next, -delta_max, delta_max))
+                if any(abs(d_next - d) < 1e-5 for d in deltas):
+                    d_next = float(
+                        np.clip(
+                            d_curr
+                            + (step_mag * 0.25 if g_curr > 0 else -step_mag * 0.25),
+                            -delta_max,
+                            delta_max,
                         )
-                    else:
-                        d_next = d_curr - g_curr * (d_curr - d_prev) / denom
+                    )
 
-                    d_next = float(np.clip(d_next, -delta_max, delta_max))
-                    if any(abs(d_next - d) < 1e-5 for d in deltas):
-                        d_next = float(
-                            np.clip(
-                                d_curr
-                                + (step_mag * 0.25 if g_curr > 0 else -step_mag * 0.25),
-                                -delta_max,
-                                delta_max,
-                            )
-                        )
+                pt_next = _get_coords(d_next)
+                g_next, c_next, f_next = _call_eval(pt_next)
+                deltas.append(d_next)
+                gaps.append(g_next)
+                costs.append(c_next)
 
-                    pt_next = _get_coords(d_next)
-                    g_next, c_next, f_next = _call_eval(pt_next)
-                    deltas.append(d_next)
-                    gaps.append(g_next)
-                    costs.append(c_next)
+                if c_next < best_cost:
+                    best_p = pt_next
+                    best_gap = g_next
+                    best_cost = c_next
+                    best_freq = f_next
 
-                    if c_next < best_cost:
-                        best_p = pt_next
-                        best_gap = g_next
-                        best_cost = c_next
-                        best_freq = f_next
+                if c_next < tolerance:
+                    break
 
-                    if c_next < tolerance:
-                        break
+    return (
+        idx,
+        float(best_p[p1_n]),
+        float(best_p[p2_n]),
+        float(best_gap),
+        float(best_cost),
+        best_freq,
+        bool(best_cost <= max_residual_gap),
+    )
 
-        r1_ref.append(float(best_p[p1_n]))
-        r2_ref.append(float(best_p[p2_n]))
-        gaps_ref.append(float(best_gap))
-        costs_ref.append(float(best_cost))
-        freqs_ref.append(best_freq)
-        is_valid_list.append(bool(best_cost <= max_residual_gap))
 
+def _assemble_refined_locus(
+    locus: dict[str, Any],
+    r1_ref: list[float],
+    r2_ref: list[float],
+    gaps_ref: list[float],
+    costs_ref: list[float],
+    freqs_ref: list[float | None],
+    is_valid_list: list[bool],
+    n_pts: int,
+    exclude_unrefined: bool = True,
+) -> dict[str, Any]:
+    """Assembles refined coordinates and metrics into the locus dictionary."""
     if "fom" in locus:
         locus["fom_surrogate"] = list(locus["fom"])
     foms_ref = [float(1.0 / max(c, 1e-12)) for c in costs_ref]
@@ -768,10 +749,140 @@ def refine_locus_points(
     return locus
 
 
+def refine_locus_points(
+    locus: dict[str, Any],
+    param_names: list[str],
+    evaluate_point_fn: Callable[[dict[str, float]], tuple[float, float]],
+    tolerance: float = 1e-5,
+    max_steps: int = 8,
+    exclude_unrefined: bool = True,
+    max_residual_gap: float = 1e-4,
+    param_bounds: dict[str, tuple[float, float]] | None = None,
+    step_mag: float = 0.002,
+    delta_max: float = 0.035,
+    num_workers: int = 1,
+    show_progress: bool = False,
+) -> dict[str, Any]:
+    """Refines sampled locus points to exact degeneracy using a 1D normal line search.
+
+    For each point along the extracted locus, computes the perpendicular normal vector
+    to the curve trajectory and performs a 1D secant root-finding search along the normal
+    vector until the frequency gap cost between target bands drops below `tolerance`.
+
+    Args:
+        locus: Locus dictionary containing 'x1' and 'x2' coordinate lists.
+        param_names: List of parameter names (e.g. ['r1', 'r2']).
+        evaluate_point_fn: Callable returning (signed_gap, cost) for a given parameter dictionary.
+        tolerance: Target cost threshold (e.g. 1e-5) defining exact degeneracy.
+        max_steps: Maximum secant iterations per point.
+        exclude_unrefined: Whether to prune points that cannot reach max_residual_gap.
+        max_residual_gap: Cutoff cost above which unrefined points are flagged or pruned.
+        param_bounds: Optional parameter bounds dict for clipping coordinate proposals.
+        step_mag: Initial probing displacement along the normal vector.
+        delta_max: Maximum allowed displacement from the initial spline point.
+        num_workers: Number of concurrent worker threads for point evaluation (default: 1).
+        show_progress: Whether to display a real-time progress bar (default: False).
+
+    Returns:
+        Refined locus dictionary with updated 'x1', 'x2', 'residual_gap', 'costs',
+        and preserved 'x1_unrefined', 'x2_unrefined'.
+    """
+    x1_pts = np.asarray(locus["x1"], dtype=float)
+    x2_pts = np.asarray(locus["x2"], dtype=float)
+    n_pts = len(x1_pts)
+
+    locus["x1_unrefined"] = list(x1_pts)
+    locus["x2_unrefined"] = list(x2_pts)
+
+    normals = compute_curve_normals(x1_pts, x2_pts)
+    p1_n = param_names[0] if len(param_names) >= 1 else "x1"
+    p2_n = param_names[1] if len(param_names) >= 2 else "x2"
+
+    if num_workers > 1 and n_pts > 1:
+        with ThreadPoolExecutor(max_workers=min(num_workers, n_pts)) as executor:
+            futures = [
+                executor.submit(
+                    _refine_single_point_secant,
+                    i,
+                    float(x1_pts[i]),
+                    float(x2_pts[i]),
+                    normals[i],
+                    p1_n,
+                    p2_n,
+                    evaluate_point_fn,
+                    tolerance,
+                    max_steps,
+                    step_mag,
+                    delta_max,
+                    param_bounds,
+                    max_residual_gap,
+                )
+                for i in range(n_pts)
+            ]
+            point_results = []
+            with tqdm(
+                total=n_pts,
+                desc="Refining Locus",
+                unit="pt",
+                disable=not show_progress,
+            ) as pbar:
+                for fut in as_completed(futures):
+                    point_results.append(fut.result())
+                    pbar.update(1)
+    else:
+        point_results = []
+        with tqdm(
+            total=n_pts,
+            desc="Refining Locus",
+            unit="pt",
+            disable=not show_progress,
+        ) as pbar:
+            for i in range(n_pts):
+                res = _refine_single_point_secant(
+                    i,
+                    float(x1_pts[i]),
+                    float(x2_pts[i]),
+                    normals[i],
+                    p1_n,
+                    p2_n,
+                    evaluate_point_fn,
+                    tolerance,
+                    max_steps,
+                    step_mag,
+                    delta_max,
+                    param_bounds,
+                    max_residual_gap,
+                )
+                point_results.append(res)
+                pbar.update(1)
+
+    point_results.sort(key=lambda r: r[0])
+    r1_ref = [r[1] for r in point_results]
+    r2_ref = [r[2] for r in point_results]
+    gaps_ref = [r[3] for r in point_results]
+    costs_ref = [r[4] for r in point_results]
+    freqs_ref = [r[5] for r in point_results]
+    is_valid_list = [r[6] for r in point_results]
+
+    return _assemble_refined_locus(
+        locus=locus,
+        r1_ref=r1_ref,
+        r2_ref=r2_ref,
+        gaps_ref=gaps_ref,
+        costs_ref=costs_ref,
+        freqs_ref=freqs_ref,
+        is_valid_list=is_valid_list,
+        n_pts=n_pts,
+        exclude_unrefined=exclude_unrefined,
+    )
+
+
 def evaluate_locus_group_velocities(
     locus: dict[str, Any],
     param_names: list[str],
     compute_vg_fn: Callable[[dict[str, float]], float],
+    num_workers: int = 1,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     """Evaluates group velocities at an adjacent k-point for each refined locus point.
 
@@ -780,23 +891,50 @@ def evaluate_locus_group_velocities(
         param_names: Names of the two parameters (e.g. ['r1', 'r2']).
         compute_vg_fn: Callable that accepts a parameter dictionary and returns
             the group velocity (dimensionless v_g / c).
+        num_workers: Number of concurrent worker threads (default: 1).
+        show_progress: Whether to display a real-time progress bar (default: False).
 
     Returns:
         Updated locus dictionary with 'group_velocity' and 'vg' float lists.
     """
     x1_pts = locus["x1"]
     x2_pts = locus["x2"]
-    vgs = []
     p1_name = param_names[0] if len(param_names) >= 1 else "x1"
     p2_name = param_names[1] if len(param_names) >= 2 else "x2"
 
-    for p1, p2 in zip(x1_pts, x2_pts, strict=False):
-        pt_params = {p1_name: float(p1), p2_name: float(p2)}
-        vg_val = compute_vg_fn(pt_params)
-        vgs.append(float(vg_val))
+    pts = [
+        {p1_name: float(p1), p2_name: float(p2)}
+        for p1, p2 in zip(x1_pts, x2_pts, strict=False)
+    ]
 
-    locus["group_velocity"] = vgs
-    locus["vg"] = vgs
+    if num_workers > 1 and len(pts) > 1:
+        with ThreadPoolExecutor(max_workers=min(num_workers, len(pts))) as executor:
+            futures = [executor.submit(compute_vg_fn, p) for p in pts]
+            vgs = [0.0] * len(pts)
+            with tqdm(
+                total=len(pts),
+                desc="Evaluating Group Velocity",
+                unit="pt",
+                disable=not show_progress,
+            ) as pbar:
+                for idx, fut in enumerate(futures):
+                    vgs[idx] = fut.result()
+                    pbar.update(1)
+    else:
+        vgs = []
+        with tqdm(
+            total=len(pts),
+            desc="Evaluating Group Velocity",
+            unit="pt",
+            disable=not show_progress,
+        ) as pbar:
+            for p in pts:
+                vgs.append(compute_vg_fn(p))
+                pbar.update(1)
+
+    vgs_clean = [float(v) for v in vgs]
+    locus["group_velocity"] = vgs_clean
+    locus["vg"] = vgs_clean
     return locus
 
 
@@ -804,6 +942,8 @@ def evaluate_locus_dirac_frequencies(
     locus: dict[str, Any],
     param_names: list[str],
     compute_freq_fn: Callable[[dict[str, float]], float],
+    num_workers: int = 1,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     """Evaluates the Dirac eigenfrequency at Gamma for each locus point.
 
@@ -812,23 +952,50 @@ def evaluate_locus_dirac_frequencies(
         param_names: Names of the two parameters (e.g. ['r1', 'r2']).
         compute_freq_fn: Callable that accepts a parameter dictionary and returns
             the Dirac eigenfrequency (dimensionless omega_D = a / lambda).
+        num_workers: Number of concurrent worker threads (default: 1).
+        show_progress: Whether to display a real-time progress bar (default: False).
 
     Returns:
         Updated locus dictionary with 'dirac_frequency' and 'omega_d' float lists.
     """
     x1_pts = locus["x1"]
     x2_pts = locus["x2"]
-    freqs = []
     p1_name = param_names[0] if len(param_names) >= 1 else "x1"
     p2_name = param_names[1] if len(param_names) >= 2 else "x2"
 
-    for p1, p2 in zip(x1_pts, x2_pts, strict=False):
-        pt_params = {p1_name: float(p1), p2_name: float(p2)}
-        f_val = compute_freq_fn(pt_params)
-        freqs.append(float(f_val))
+    pts = [
+        {p1_name: float(p1), p2_name: float(p2)}
+        for p1, p2 in zip(x1_pts, x2_pts, strict=False)
+    ]
 
-    locus["dirac_frequency"] = freqs
-    locus["omega_d"] = freqs
+    if num_workers > 1 and len(pts) > 1:
+        with ThreadPoolExecutor(max_workers=min(num_workers, len(pts))) as executor:
+            futures = [executor.submit(compute_freq_fn, p) for p in pts]
+            freqs = [0.0] * len(pts)
+            with tqdm(
+                total=len(pts),
+                desc="Evaluating Dirac Frequency",
+                unit="pt",
+                disable=not show_progress,
+            ) as pbar:
+                for idx, fut in enumerate(futures):
+                    freqs[idx] = fut.result()
+                    pbar.update(1)
+    else:
+        freqs = []
+        with tqdm(
+            total=len(pts),
+            desc="Evaluating Dirac Frequency",
+            unit="pt",
+            disable=not show_progress,
+        ) as pbar:
+            for p in pts:
+                freqs.append(compute_freq_fn(p))
+                pbar.update(1)
+
+    freqs_clean = [float(f) for f in freqs]
+    locus["dirac_frequency"] = freqs_clean
+    locus["omega_d"] = freqs_clean
     return locus
 
 

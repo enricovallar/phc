@@ -56,6 +56,14 @@ def plot_band_structure(
     title: str = "Photonic Band Structure",
     save_path: str | Path | None = None,
     *,
+    normalize: bool = True,
+    pitch: float | None = None,
+    pitch_um: float | None = None,
+    lattice_constant: float | None = None,
+    lam_min: float = 0.3,
+    lam_max: float = 0.6,
+    ylim: tuple[float, float] | None = None,
+    ylabel: str | None = None,
     k_labels: list[str] | None = None,
     k_indices: list[int] | None = None,
     marker: str | dict[str, str] | None = None,
@@ -85,6 +93,13 @@ def plot_band_structure(
     TE fraction (1.0 = in-plane dominant / TE, 0.0 = out-of-plane dominant / TM), and a
     polarization colorbar is rendered.
 
+    When `normalize=True` (default), plots normalized dimensionless frequency
+    omega * a / (2 * pi * c) = a / lambda.
+    When `normalize=False`, converts frequencies to physical free-space wavelengths
+    in micrometers (um) via lambda = pitch / omega_tilde, using the lattice pitch, and
+    updates the y-axis label to reflect wavelength in um. By default, the y-axis spans
+    from `lam_min` (0.3 um) to `lam_max` (0.6 um) unless `ylim` is specified.
+
     Highlights complete omnidirectional band gaps with gold shading and percentage labels.
     If light line data is present in results, plots the light line and shades the radiative light cone.
 
@@ -98,6 +113,7 @@ def plot_band_structure(
               containing modal TE energy fractions in [0.0, 1.0].
             - 'confinements' (optional): 2D array or dict containing modal slab core energy
               confinements eta_slab in [0.0, 1.0].
+            - 'pitch' (optional): Lattice pitch constant in micrometers.
         node_labels: List of string labels for high-symmetry k-points along the path
             (e.g., `["M", "Γ", "K", "M"]`). Also accepts keyword argument `k_labels`.
         node_indices: List of integer indices corresponding to the positions of the
@@ -106,6 +122,19 @@ def plot_band_structure(
         title: Plot title displayed at top of figure.
         save_path: Optional file path (PNG, PDF, SVG) where figure will be saved.
             Parent directories are created automatically if they do not exist.
+        normalize: If True (default), plots dimensionless normalized frequency
+            omega * a / (2 * pi * c) = a / lambda. If False, plots physical wavelength
+            lambda_0 in micrometers (um), converting via lambda = pitch / omega_tilde.
+        pitch: Lattice pitch constant a in micrometers (um). Required when normalize=False
+            unless specified inside `results`.
+        pitch_um: Alias for `pitch`.
+        lattice_constant: Alias for `pitch`.
+        lam_min: Minimum wavelength limit in micrometers (um) for y-axis when normalize=False
+            and ylim is None (default: 0.3).
+        lam_max: Maximum wavelength limit in micrometers (um) for y-axis when normalize=False
+            and ylim is None (default: 0.6).
+        ylim: Optional manual y-axis limits tuple `(y_min, y_max)`.
+        ylabel: Optional custom y-axis label string overriding the automatic label.
         k_labels: Alias for `node_labels`.
         k_indices: Alias for `node_indices`.
         marker: Matplotlib marker style for eigenfrequency dots. Can be a single marker string
@@ -136,10 +165,58 @@ def plot_band_structure(
         The matplotlib Figure object containing the rendered band diagram.
 
     Raises:
-        ValueError: If results dictionary does not contain a valid 'freqs' map.
+        ValueError: If results dictionary does not contain a valid 'freqs' map, or if
+            normalize=False and pitch is missing or non-positive.
     """
     labels = k_labels if k_labels is not None else (node_labels or [])
     indices = k_indices if k_indices is not None else (node_indices or [])
+
+    # Resolve lattice constant (pitch) in micrometers
+    resolved_pitch = (
+        pitch
+        if pitch is not None
+        else (pitch_um if pitch_um is not None else lattice_constant)
+    )
+    if resolved_pitch is None:
+        resolved_pitch = (
+            results.get("pitch")
+            or results.get("pitch_um")
+            or results.get("lattice_constant")
+            or results.get("a")
+        )
+    if resolved_pitch is None and isinstance(results.get("geometry"), dict):
+        geom_dict = results["geometry"]
+        resolved_pitch = (
+            geom_dict.get("pitch_um") or geom_dict.get("pitch") or geom_dict.get("a")
+        )
+    if resolved_pitch is None and isinstance(results.get("extra_data"), dict):
+        extra_dict = results["extra_data"]
+        resolved_pitch = (
+            extra_dict.get("pitch_um") or extra_dict.get("pitch") or extra_dict.get("a")
+        )
+
+    if not normalize:
+        if resolved_pitch is None:
+            raise ValueError(
+                "Lattice constant 'pitch' (in µm) must be provided (either via the "
+                "'pitch' argument or inside 'results') when normalize=False."
+            )
+        try:
+            resolved_pitch = float(resolved_pitch)
+        except (ValueError, TypeError) as err:
+            raise ValueError(
+                f"Lattice constant (pitch) must be numeric, got {resolved_pitch}."
+            ) from err
+
+        if resolved_pitch <= 0:
+            raise ValueError(
+                f"Lattice constant (pitch) must be strictly positive, got {resolved_pitch}."
+            )
+
+        if lam_min >= lam_max:
+            raise ValueError(
+                f"lam_min ({lam_min}) must be strictly less than lam_max ({lam_max})."
+            )
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(7.5, 5), dpi=150)
@@ -256,9 +333,21 @@ def plot_band_structure(
             fracs_to_plot = pol_fracs
             conf_alphas = None
 
+        if normalize:
+            y_data = freq_to_plot
+        else:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                y_data = np.where(
+                    freq_to_plot > 0, resolved_pitch / freq_to_plot, np.nan
+                )
+
         for band_idx in range(num_bands):
-            y_band = freq_to_plot[:, band_idx]
-            valid_mask = ~np.isnan(y_band)
+            y_band = y_data[:, band_idx]
+            if normalize:
+                valid_mask = np.isfinite(y_band) & (y_band >= 0)
+            else:
+                valid_mask = np.isfinite(y_band) & (y_band > 0)
+
             if not np.any(valid_mask):
                 continue
 
@@ -320,9 +409,18 @@ def plot_band_structure(
                         if len(freqs_dict) > 1
                         else f"Gap {band_idx + 1}-{band_idx + 2} ({gap_pct:.1f}%)"
                     )
+                    if normalize:
+                        gap_y_low = bot
+                        gap_y_high = top
+                    else:
+                        if bot <= 0:
+                            continue
+                        gap_y_low = resolved_pitch / top
+                        gap_y_high = resolved_pitch / bot
+
                     ax.axhspan(
-                        bot,
-                        top,
+                        gap_y_low,
+                        gap_y_high,
                         color="gold",
                         alpha=0.25,
                         label=gap_label,
@@ -330,12 +428,34 @@ def plot_band_structure(
 
     # Plot light line if available (for 3D slabs)
     if "light_line" in results and len(results["light_line"]) > 0:
-        ll = results["light_line"]
+        ll = np.asarray(results["light_line"])
         x_ll = np.arange(len(ll))
-        ax.plot(x_ll, ll, color="black", linestyle="--", lw=1.2, label="Light Line")
-        ax.fill_between(
-            x_ll, ll, np.max(ll) * 1.5, color="gray", alpha=0.15, label="Light Cone"
-        )
+        if normalize:
+            ax.plot(x_ll, ll, color="black", linestyle="--", lw=1.2, label="Light Line")
+            ax.fill_between(
+                x_ll, ll, np.max(ll) * 1.5, color="gray", alpha=0.15, label="Light Cone"
+            )
+        else:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ll_wl = np.where(ll > 0, resolved_pitch / ll, np.nan)
+            valid_ll = np.isfinite(ll_wl)
+            if np.any(valid_ll):
+                ax.plot(
+                    x_ll[valid_ll],
+                    ll_wl[valid_ll],
+                    color="black",
+                    linestyle="--",
+                    lw=1.2,
+                    label="Light Line",
+                )
+                ax.fill_between(
+                    x_ll[valid_ll],
+                    0,
+                    ll_wl[valid_ll],
+                    color="gray",
+                    alpha=0.15,
+                    label="Light Cone",
+                )
 
     # High-symmetry labels & vertical grid lines
     if indices and len(indices) == len(labels):
@@ -352,11 +472,25 @@ def plot_band_structure(
         cbar.set_ticklabels(["0.0 (TM)", "0.25", "0.50", "0.75", "1.0 (TE)"])
 
     ax.set_xlim(0, x_max if x_max > 0 else 1)
-    ax.set_ylim(bottom=0)
-    ax.set_ylabel(
-        r"Normalized Frequency $\tilde{\omega} = \omega a / 2\pi c = a / \lambda$",
-        fontsize=11,
-    )
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    elif normalize:
+        ax.set_ylim(bottom=0)
+    else:
+        ax.set_ylim(lam_min, lam_max)
+
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=11)
+    elif normalize:
+        ax.set_ylabel(
+            r"Normalized Frequency $\tilde{\omega} = \omega a / 2\pi c = a / \lambda$",
+            fontsize=11,
+        )
+    else:
+        ax.set_ylabel(
+            r"Wavelength $\lambda$ [$\mu$m]",
+            fontsize=11,
+        )
     ax.set_title(title, fontsize=13, fontweight="bold")
 
     handles, _legend_labels = ax.get_legend_handles_labels()
@@ -375,6 +509,9 @@ def plot_band_structure(
     return fig
 
 
+plot_band_diagram = plot_band_structure
+
+
 def replot_band_structure_from_results(
     results_path: Path | str | None = None,
     solver: str = "mpb",
@@ -383,6 +520,12 @@ def replot_band_structure_from_results(
     base_dir: Path | str = "outputs",
     save_path: Path | str | None = None,
     *,
+    normalize: bool = True,
+    pitch: float | None = None,
+    lam_min: float = 0.3,
+    lam_max: float = 0.6,
+    ylim: tuple[float, float] | None = None,
+    ylabel: str | None = None,
     marker: str | dict[str, str] | None = None,
     markers: dict[str, str] | None = None,
     markersize: float | dict[str, float] | None = None,
@@ -409,6 +552,14 @@ def replot_band_structure_from_results(
         geometry: Geometry filter when auto-discovering (e.g. 'c6v_primitive').
         base_dir: Base output directory for auto-discovery (default: 'outputs').
         save_path: Optional file path to save the generated figure.
+        normalize: If True (default), plots normalized dimensionless frequency.
+            If False, plots physical wavelength in micrometers (um), converting via lambda = pitch / omega_tilde.
+        pitch: Optional lattice constant pitch in micrometers (um). If None, automatically
+            inferred from the saved JSON geometry.
+        lam_min: Minimum wavelength limit in micrometers (um) when normalize=False (default: 0.3).
+        lam_max: Maximum wavelength limit in micrometers (um) when normalize=False (default: 0.6).
+        ylim: Optional manual y-axis limits tuple `(y_min, y_max)`.
+        ylabel: Optional custom y-axis label string overriding the automatic label.
         marker: Single marker or marker dictionary for polarization modes.
         markers: Optional dictionary mapping polarization keys to marker styles.
         markersize: Size of markers in points or dict per polarization.
@@ -471,19 +622,31 @@ def replot_band_structure_from_results(
     else:
         confinements_data = None
 
+    geom_info = data.get("geometry", {})
+    resolved_pitch = pitch
+    if resolved_pitch is None and isinstance(geom_info, dict):
+        resolved_pitch = (
+            geom_info.get("pitch_um") or geom_info.get("pitch") or geom_info.get("a")
+        )
+    if resolved_pitch is None:
+        resolved_pitch = data.get("pitch") or data.get("pitch_um")
+
     results: dict[str, Any] = {
         "freqs": freqs_dict,
         "te_fractions": te_fracs,
         "confinements": confinements_data,
         "light_line": extra.get("light_line", []),
-        "dimension": data.get("geometry", {}).get("dimension", "3D_slab"),
+        "dimension": geom_info.get("dimension", "3D_slab")
+        if isinstance(geom_info, dict)
+        else "3D_slab",
+        "pitch": resolved_pitch,
     }
 
     labels = extra.get("k_labels")
     indices = extra.get("k_indices")
 
     plot_title = title or (
-        f"Re-plotted Band Structure — {data.get('geometry', {}).get('name', 'PhC')}"
+        f"Re-plotted Band Structure — {geom_info.get('name', 'PhC') if isinstance(geom_info, dict) else 'PhC'}"
     )
 
     return plot_band_structure(
@@ -492,6 +655,12 @@ def replot_band_structure_from_results(
         node_indices=indices,
         title=plot_title,
         save_path=save_path,
+        normalize=normalize,
+        pitch=resolved_pitch,
+        lam_min=lam_min,
+        lam_max=lam_max,
+        ylim=ylim,
+        ylabel=ylabel,
         marker=marker,
         markers=markers,
         markersize=markersize,

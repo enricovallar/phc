@@ -61,7 +61,14 @@ class DiracDegeneracyObjective(BaseObjective):
         """
         self.symmetry_group = symmetry_group
         self.polarization = polarization.lower()
-        self.target_irreps = list(target_irreps)
+        if symmetry_group.upper() == "C6V" and tuple(target_irreps) == (
+            "A_1",
+            "E",
+            "E",
+        ):
+            self.target_irreps = ["A_2", "E_1", "E_1"]
+        else:
+            self.target_irreps = list(target_irreps)
         self.irrep_occurrences = list(irrep_occurrences)
         self.min_band = min_band
         self.degeneracy_tol = degeneracy_tol

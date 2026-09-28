@@ -26,6 +26,7 @@ alpha = [
 ]
 
 import matplotlib.pyplot as plt
+
 plt.plot(E, alpha)
 plt.xlabel('E [eV]')
 plt.ylabel(r'$\alpha$')

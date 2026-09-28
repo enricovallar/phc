@@ -137,7 +137,7 @@ To prevent unphysical, floating, or disjoint dielectric structures during parame
 | **Geometry & Layout Engine** | MPB Scheme `.ctl` files with fixed parameters (`r1`, `r2`, `h`) | **GDSFactory** components from `phc_layout` (arbitrary parameter count and names) |
 | **MPB Interface** | Shell command `mpb ... main.ctl > output.out` + regex log parsing | Direct Python `meep.mpb.ModeSolver` API (`packages/phc_mpb`) |
 | **Symmetry Computation** | Scheme callbacks in `parity_functions.ctl` outputting text blocks | Native Python `ms.compute_symmetry` with $C_{4v}$/$C_{6v}$ symmetry matrices |
-| **Degenerate Mode Correction**| Regex-based log parser with `failsafe_irrep_mapping` | Subspace trace projection $\text{Tr}_B(R) +$ failsafe mapping |
+| **Degenerate Mode Correction**| Regex-based log parser with `failsafe_irrep_mapping` | Unitary-invariant subspace trace (`resolve_multiplet_symmetries`, replacing `failsafe_irrep_mapping`) |
 | **Group Velocity** | Parsed from `*velocity:` log output | Direct `ms.compute_group_velocities()` in Python |
 | **Connectivity Checking** | Read `main-epsilon.h5` from disk | Direct in-memory inspection of `ms.get_epsilon()` or `phc_mpb.get_epsilon_grid` |
 | **Output Directory Hierarchy** | Custom `bo_output/` | Monorepo standard `outputs/mpb/optimization/<geometry>/<timestamp>/` |

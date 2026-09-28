@@ -133,6 +133,8 @@ def run_band_solver(
             polarization_method=polarization_method,
             slab_thickness=slab_thickness,
             z_center=z_center,
+            compute_symmetries=compute_symmetries,
+            symmetry_group=symmetry_group,
         )
     if not hasattr(ms, "run_te"):
         raise TypeError(f"Expected an mpb.ModeSolver instance, got {type(ms).__name__}")
@@ -230,6 +232,14 @@ def run_band_solver(
             _execute_run(ms.run_zodd, "tm_like")
         if pol in ("all", "no_parity"):
             _execute_run(ms.run, "all")
+        if "te_like" in results["freqs"] and pol in ("te", "both"):
+            results["freqs"]["te"] = results["freqs"]["te_like"]
+            if "te_like" in results.get("symmetries", {}):
+                results["symmetries"]["te"] = results["symmetries"]["te_like"]
+        if "tm_like" in results["freqs"] and pol in ("tm", "both"):
+            results["freqs"]["tm"] = results["freqs"]["tm_like"]
+            if "tm_like" in results.get("symmetries", {}):
+                results["symmetries"]["tm"] = results["symmetries"]["tm_like"]
 
     # Compute cladding light line for 3D slabs
     if dimension == "3D_slab" and hasattr(ms, "k_points"):

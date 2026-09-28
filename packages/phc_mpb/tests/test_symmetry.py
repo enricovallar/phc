@@ -6,7 +6,6 @@ from phc_mpb.solver import create_mode_solver, run_band_solver
 from phc_mpb.symmetry import (
     compute_projections,
     compute_subspace_trace_projection,
-    failsafe_irrep_mapping,
     find_bands_from_irreps,
     get_symmetry_operators,
     identify_irrep,
@@ -98,24 +97,6 @@ def test_degenerate_subspace_trace_projection() -> None:
     assert abs(mult["A_2"]) < 1e-4
 
 
-def test_failsafe_irrep_mapping() -> None:
-    """Tests failsafe relabeling on a scrambled degenerate cluster."""
-    full_map = {
-        2: ("A_1", 0.98, 0.450),
-        3: ("Unknown", 0.52, 0.451),
-        4: ("Unknown", 0.49, 0.451),
-    }
-    corrections = failsafe_irrep_mapping(
-        target_irreps=["A_1", "E", "E"],
-        degeneracy_tol=0.005,
-        full_irrep_map=full_map,
-        bands_to_check=[2, 3, 4],
-    )
-    assert len(corrections) == 2
-    assert full_map[3][0] == "E"
-    assert full_map[4][0] == "E"
-
-
 def test_find_bands_from_irreps() -> None:
     """Tests dynamic mapping of target irreps to band indices."""
     symmetries = [
@@ -169,3 +150,119 @@ def test_live_mpb_symmetry_and_group_velocity() -> None:
     assert "te" in results["group_velocities"]
     vgs = results["group_velocities"]["te"]
     assert vgs.shape == (1, 4, 3)
+
+
+def test_resolve_multiplet_symmetries() -> None:
+    """Verifies degenerate subspace resolution, singlet restriction, and accidental triplet partitioning."""
+    from phc_mpb.symmetry import resolve_multiplet_symmetries
+
+    # Simulate bands 8, 9, 10, 11 scenario in C6v:
+    # Band 8: isolated at 0.828, raw projection picked E_1 due to d_i=2 bias, but 1D is A_1
+    # Band 9: 0.8636, odd/even reflection mixed state
+    # Band 10: 0.8664, odd reflection matching B_1 in single state
+    # Band 11: 0.8684, A_2 singlet
+    records = [
+        {
+            "band": 8,
+            "freq": 0.828353,
+            "irrep": "E_1",
+            "confidence": 0.9369,
+            "characters": {
+                "C6": 0.4056,
+                "C3": -0.4051,
+                "C2": -1.0,
+                "sv": 0.4180,
+                "sd": 1.0,
+            },
+            "projections": {
+                "A_1": 0.3545,
+                "A_2": 0.0,
+                "B_1": 0.0,
+                "B_2": 0.1770,
+                "E_1": 0.9369,
+                "E_2": 0.0,
+            },
+        },
+        {
+            "band": 9,
+            "freq": 0.863638,
+            "irrep": "E_1",
+            "confidence": 0.7119,
+            "characters": {
+                "C6": 0.0656,
+                "C3": -0.0719,
+                "C2": -0.9982,
+                "sv": 0.0568,
+                "sd": 0.9978,
+            },
+            "projections": {
+                "A_1": 0.2628,
+                "A_2": 0.0,
+                "B_1": 0.0,
+                "B_2": 0.3788,
+                "E_1": 0.7119,
+                "E_2": 0.0027,
+            },
+        },
+        {
+            "band": 10,
+            "freq": 0.866373,
+            "irrep": "B_1",
+            "confidence": 0.5221,
+            "characters": {
+                "C6": -0.1846,
+                "C3": 0.2033,
+                "C2": -0.9456,
+                "sv": 0.1819,
+                "sd": -0.9994,
+            },
+            "projections": {
+                "A_1": 0.0,
+                "A_2": 0.2120,
+                "B_1": 0.5221,
+                "B_2": 0.0,
+                "E_1": 0.5192,
+                "E_2": 0.0119,
+            },
+        },
+        {
+            "band": 11,
+            "freq": 0.868403,
+            "irrep": "A_2",
+            "confidence": 0.6031,
+            "characters": {
+                "C6": 0.3262,
+                "C3": 0.3380,
+                "C2": 0.9438,
+                "sv": -0.3236,
+                "sd": -0.9981,
+            },
+            "projections": {
+                "A_1": 0.0,
+                "A_2": 0.6031,
+                "B_1": 0.1753,
+                "B_2": 0.0,
+                "E_1": 0.0148,
+                "E_2": 0.4265,
+            },
+        },
+    ]
+
+    resolved = resolve_multiplet_symmetries(
+        records, symmetry_group="C6v", degeneracy_tol=0.015
+    )
+    assert len(resolved) == 4
+
+    # Band 8 is an isolated singlet -> resolved to A_1 (not E_1)
+    assert resolved[0]["band"] == 8
+    assert resolved[0]["irrep"] == "A_1"
+
+    # Bands 9, 10, 11 are an accidental triplet -> partitioned to E_1, E_1, A_2
+    assert resolved[1]["band"] == 9
+    assert resolved[1]["irrep"] == "E_1"
+
+    assert resolved[2]["band"] == 10
+    assert resolved[2]["irrep"] == "E_1"
+
+    assert resolved[3]["band"] == 11
+    assert resolved[3]["irrep"] == "A_2"

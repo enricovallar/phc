@@ -76,13 +76,14 @@ def test_phc_wyckoff_unit_cell_errors():
 
 def test_unit_cell_database_catalog():
     all_cells = list_unit_cells()
-    assert len(all_cells) == 16
+    assert len(all_cells) == 17
 
     c6v_cells = list_unit_cells(point_group="C6v")
-    assert len(c6v_cells) == 8
+    assert len(c6v_cells) == 9
     assert "c6v_honeycomb" in c6v_cells
     assert "c6v_kagome" in c6v_cells
     assert "c6v_painter_snowflake" in c6v_cells
+    assert "c6v_2b_6d" in c6v_cells
 
     c4v_cells = list_unit_cells(point_group="C4v")
     assert len(c4v_cells) == 8
@@ -108,6 +109,7 @@ def test_unit_cell_database_instantiation_all():
         "c6v_ring_6e": 6,
         "c6v_snowflake_6d": 7,
         "c6v_snowflake_6e": 7,
+        "c6v_2b_6d": 8,
         "c4v_primitive": 1,
         "c4v_checkerboard": 2,
         "c4v_lieb": 2,

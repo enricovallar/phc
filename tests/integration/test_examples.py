@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from examples.demo_hex_2d_mpb import run_hex_2d_pipeline
@@ -28,7 +29,6 @@ def test_hex_2d_mpb_pipeline_smoke(tmp_path: Path):
     assert (tmp_path / "phc_hex_unit_cell.gds").is_file()
     assert (tmp_path / "epsilon_hex_2d.png").is_file()
     assert (tmp_path / "band_diagram_hex_te.png").is_file()
-
 
 
 @pytest.mark.integration
@@ -301,3 +301,113 @@ def test_demo_slab_3d_cladding_sweep_smoke(tmp_path: Path):
     assert len(out["band_plots"]) == 3
     for p_str in out["band_plots"]:
         assert Path(p_str).is_file()
+
+
+@pytest.mark.integration
+def test_c6v_mode_tracking_pipeline_smoke(tmp_path: Path):
+    """End-to-end smoke test verifying C6v 2b-6d modal overlap and mode tracking pipeline."""
+    from analysis.test_c6v_mode_tracking import run_mode_tracking_pipeline
+
+    out = run_mode_tracking_pipeline(
+        quick=True,
+        output_dir=tmp_path,
+        verbose=False,
+    )
+
+    assert "results_summary" in out
+    assert "overlap_matrix" in out
+    assert "best_matches" in out
+    assert "top_target_bands" in out
+
+    overlap_mat = out["overlap_matrix"]
+    assert overlap_mat.ndim == 2
+    assert np.all(overlap_mat >= 0.0)
+    assert np.all(overlap_mat <= 1.0)
+
+    # Canonical artifacts
+    assert (tmp_path / "unit_cell.gds").is_file()
+    assert (tmp_path / "epsilon_map.png").is_file()
+    assert (tmp_path / "mode_tracking.png").is_file()
+    assert (tmp_path / "simulation_results.json").is_file()
+
+
+@pytest.mark.integration
+def test_c6v_substrate_optimization_pipeline_smoke(tmp_path: Path):
+    """End-to-end smoke test verifying C6v 2b-6d accidental degeneracy optimization on SiO2."""
+    from analysis.optimize_c6v_substrate_degeneracy import (
+        run_c6v_substrate_optimization_pipeline,
+    )
+
+    out = run_c6v_substrate_optimization_pipeline(
+        quick=True,
+        output_dir=tmp_path,
+        verbose=False,
+    )
+
+    assert "target_design" in out
+    assert "primary_locus" in out
+    assert "optimization_result" in out
+    assert "manifest" in out
+
+    td = out["target_design"]
+    assert "parameters" in td
+    assert "r1_um" in td["parameters"]
+    assert "r2_um" in td["parameters"]
+    assert "operating_point" in td
+    assert "omega_d" in td["operating_point"]
+
+    # Canonical artifacts
+    assert (tmp_path / "unit_cell.gds").is_file()
+    assert (tmp_path / "optimal_loci.png").is_file()
+    assert (tmp_path / "locus_refined.csv").is_file()
+    assert (tmp_path / "target_design_summary.json").is_file()
+    assert (tmp_path / "simulation_results.json").is_file()
+
+
+@pytest.mark.integration
+def test_optimal_c6v_substrate_bands_smoke(tmp_path: Path):
+    """End-to-end smoke test verifying optimal C6v band structure simulation on SiO2."""
+    from analysis.simulate_optimal_c6v_substrate_bands import (
+        run_optimal_band_structure_simulation,
+    )
+
+    out = run_optimal_band_structure_simulation(
+        quick=True,
+        output_dir=tmp_path,
+        verbose=False,
+    )
+
+    assert "results" in out
+    assert "freqs" in out["results"]
+    assert "all" in out["results"]["freqs"]
+    assert len(out["results"]["freqs"]["all"]) > 0
+
+    assert (tmp_path / "unit_cell.gds").is_file()
+    assert (tmp_path / "epsilon_map.png").is_file()
+    assert (tmp_path / "band_structure.png").is_file()
+    assert (tmp_path / "band_structure_wavelength.png").is_file()
+    assert (tmp_path / "simulation_results.json").is_file()
+
+
+@pytest.mark.integration
+def test_normal_te_symmetry_analysis_smoke():
+    """Smoke test verifying normal TE implementation and Gamma symmetry classification."""
+    from analysis.simulate_optimal_c6v_substrate_bands import (
+        run_normal_te_symmetry_analysis,
+    )
+
+    out = run_normal_te_symmetry_analysis(
+        resolution=12,
+        resolution_z=8,
+        num_bands=6,
+        verbose=False,
+    )
+
+    assert "air_frequencies" in out
+    assert "air_symmetries" in out
+    assert "substrate_frequencies" in out
+    assert "substrate_symmetries" in out
+    assert len(out["air_symmetries"]) > 0
+    assert len(out["substrate_symmetries"]) > 0
+
+

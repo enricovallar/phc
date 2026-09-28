@@ -171,3 +171,84 @@ def test_compute_polarization_fractions_with_slab_core_masking():
     frac_compat = compute_polarization_fractions(ms, band_idx=1)
     assert isinstance(frac_compat, dict)
     assert 0.0 <= frac_compat["te"] <= 1.0
+
+
+def test_mode_overlap_and_tracking():
+    """Verifies mode overlap integral, overlap matrix, and mode tracking."""
+    import meep as mp
+    from meep import mpb
+    from phc_mpb.classification import (
+        compute_mode_overlap,
+        compute_mode_overlap_matrix,
+        track_modes_by_overlap,
+    )
+
+    lat = mp.Lattice(size=mp.Vector3(1, 1, 3))
+    geom = [
+        mp.Block(
+            center=mp.Vector3(0, 0, 0),
+            size=mp.Vector3(mp.inf, mp.inf, 0.4),
+            material=mp.Medium(index=2.5),
+        )
+    ]
+    ms = mpb.ModeSolver(
+        geometry_lattice=lat,
+        geometry=geom,
+        k_points=[mp.Vector3(0.25, 0, 0)],
+        resolution=12,
+        num_bands=3,
+    )
+    ms.run()
+
+    # 1. Self-overlap must be 1.0
+    for field_type in ("electric_displacement", "electric", "magnetic"):
+        ov_self = compute_mode_overlap(ms, 1, ms, 1, field=field_type)
+        assert pytest.approx(ov_self, abs=1e-4) == 1.0
+
+    # 2. Orthogonality of distinct bands
+    ov_12 = compute_mode_overlap(ms, 1, ms, 2, field="electric_displacement")
+    assert ov_12 < 0.05
+
+    # 3. Overlap with slab masking
+    ov_slab = compute_mode_overlap(
+        ms, 1, ms, 1, field="electric_displacement", slab_thickness=0.4
+    )
+    assert pytest.approx(ov_slab, abs=1e-3) == 1.0
+
+    # 4. Overlap matrix computation
+    mat = compute_mode_overlap_matrix(ms, ms, bands_ref=[1, 2], bands_target=[1, 2, 3])
+    assert mat.shape == (2, 3)
+    assert pytest.approx(mat[0, 0], abs=1e-4) == 1.0
+    assert pytest.approx(mat[1, 1], abs=1e-4) == 1.0
+    assert mat[0, 1] < 0.05
+    assert mat[1, 0] < 0.05
+
+    # 5. Mode tracking
+    tracking = track_modes_by_overlap(
+        ms_ref=ms,
+        ms_target=ms,
+        ref_bands=[1, 2],
+        pitch=0.5,
+    )
+    assert len(tracking["best_matches"]) == 2
+    match1 = tracking["best_matches"][0]
+    match2 = tracking["best_matches"][1]
+    assert match1["ref_band"] == 1
+    assert match1["target_band"] == 1
+    assert pytest.approx(match1["max_overlap"], abs=1e-4) == 1.0
+    assert pytest.approx(match1["delta_frequency"], abs=1e-6) == 0.0
+    assert match1["ref_wavelength_nm"] is not None
+
+    assert match2["ref_band"] == 2
+    assert match2["target_band"] == 2
+    assert pytest.approx(match2["max_overlap"], abs=1e-4) == 1.0
+
+    assert len(tracking["subspace_projection"]) == 3
+    assert tracking["ranked_target_bands"][:2] in ([1, 2], [2, 1])
+
+    # 6. Error handling
+    with pytest.raises(ValueError, match="Unknown field type"):
+        compute_mode_overlap(ms, 1, ms, 1, field="invalid_field")
+
+    with pytest.raises(ValueError, match="ref_bands sequence must not be empty"):
+        track_modes_by_overlap(ms, ms, ref_bands=[])

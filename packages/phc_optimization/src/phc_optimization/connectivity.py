@@ -136,6 +136,7 @@ def check_slab_connectivity(
     epsilon_threshold: float = 1.1,
     check_pbc: bool = True,
     min_neck_width_px: int = 1,
+    z_slice: int | str | None = "midplane",
 ) -> tuple[bool, int, str]:
     """Inspects an MPB ModeSolver or numpy permittivity array and evaluates continuity.
 
@@ -145,6 +146,8 @@ def check_slab_connectivity(
         epsilon_threshold: Permittivity threshold separating high-index matrix from low-index holes.
         check_pbc: Whether to verify continuous spanning across periodic unit cell boundaries.
         min_neck_width_px: Minimum feature neck width in grid pixels.
+        z_slice: Z-slice to inspect for 3D slabs ('midplane' for z=0, an integer index, or None for full 3D).
+            Default: 'midplane'.
 
     Returns:
         Tuple of (is_connected: bool, num_features: int, description: str).
@@ -164,8 +167,19 @@ def check_slab_connectivity(
             f"Expected ModeSolver or np.ndarray, got {type(ms_or_epsilon).__name__}"
         )
 
+    if eps_array.ndim == 3 and z_slice is not None:
+        if z_slice in ("midplane", "z=0", "z0"):
+            iz = eps_array.shape[2] // 2
+        elif isinstance(z_slice, int):
+            iz = z_slice
+        else:
+            raise ValueError(f"Unknown z_slice option '{z_slice}'")
+        target_eps = eps_array[:, :, iz]
+    else:
+        target_eps = eps_array
+
     return check_array_connectivity(
-        epsilon=eps_array,
+        epsilon=target_eps,
         epsilon_threshold=epsilon_threshold,
         check_pbc=check_pbc,
         min_neck_width_px=min_neck_width_px,
