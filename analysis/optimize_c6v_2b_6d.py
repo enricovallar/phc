@@ -30,8 +30,14 @@ Command-Line Usage:
     # 3D slab on SiO2 substrate matching 3 reference modes from unperturbed air-clad membrane:
     python analysis/optimize_c6v_2b_6d.py --substrate-material sio2 --match-reference-modes --workers 16
 
-    # Refine continuous degeneracy locus and plot closest match full band diagram:
+    # Refine continuous degeneracy locus #1 and plot closest match full band diagram:
     python analysis/optimize_c6v_2b_6d.py --analyze-locus
+
+    # Detect 2 loci on GP surrogate map and refine only locus #2:
+    python analysis/optimize_c6v_2b_6d.py --find-loci 2 --analyze-locus 2
+
+    # Analyze locus #2 from an existing optimization run without re-running optimization:
+    python analysis/optimize_c6v_2b_6d.py --from-run <DIR> --analyze-locus 2 --threshold-percentile 80
 
 CLI Options:
     --quick                     Run in rapid smoke-test mode with minimal resolution and evaluations.
@@ -41,6 +47,7 @@ CLI Options:
     --substrate-material MAT    Substrate cladding material key from phc_materials (e.g. 'sio2', 'air').
     --substrate-thickness SUB_H Substrate buffer thickness in units of a (default: 2.0).
     --match-reference-modes     Identify target degeneracy by tracking 3 reference modes via modal overlap.
+    --reference-data DIR        Path to pre-saved reference dataset directory in 'saved_data/<name>'.
     --reference-run DIR         Path to previous unperturbed simulation directory.
     --reference-bands B1 B2 B3  1-based band indices of 3 reference modes at Gamma (default: 9 10 11).
     --reference-r1 R1           Nominal r1 for unperturbed reference cell.
@@ -48,6 +55,7 @@ CLI Options:
     --reference-p2 P2           Nominal p2 for unperturbed reference cell (default: 0.25).
     --polarization POL          Polarization mode: 'te_like', 'tm_like', or 'all' (default: 'all' if substrate).
     --target-irreps IRREPS      Target irreducible representations at Gamma (default: A_2 E_1 E_1).
+    --enforce-irreps / --no-enforce-irreps Enforce that tracked modes match target point-group irreps (default: True).
     --irrep-occurrences OCC     Occurrence counts above min_band (default: 1 4 4).
     --target-wavelength NM      Target physical wavelength in nm (default: 436.0).
     --target-thickness NM       Target physical slab thickness in nm (default: 100.0).
@@ -59,28 +67,44 @@ CLI Options:
     --initial-points N          Number of initial quasi-random exploration points (default: 100, quick: 2).
     --max-iterations N          Number of Bayesian optimization active learning generations (default: 0, quick: 1).
     --workers W                 Number of parallel worker processes (default: 20, quick: 1).
+    --batch-size B              Candidate points evaluated per generation (default: matches --workers).
     --output-dir PATH           Custom output directory override (default: auto-resolved by phc_hydra).
     --no-progress               Disable the real-time tqdm progress bar.
-    --analyze-locus             Refine continuous degeneracy locus curve and compute adjacent group velocity.
+    --find-loci N               Number of degeneracy loci to detect on surrogate map: int or 'auto' (default: 1).
+    --analyze-locus [IDX ...]   Refine continuous degeneracy locus curve(s) (defaults to [1] if passed without args).
     --locus-mode MODE           Mode for degeneracy locus refinement ('cartesian', 'polar', or 'auto').
+    --force-open / --no-force-open Force degeneracy locus manifold to be an open curve (default: True).
+    --overlap-mode MODE         Spatial overlap formulation ('midplane' [default], 'slab', or 'full').
     --max-refine-steps N         Maximum number of refinement steps for the degeneracy locus (default: 5).
+    --tracking-strategy STRATEGY Target mode selection algorithm ('cluster', 'bipartite', or 'greedy', default: 'cluster').
+    --kpath-type TYPE           K-path trajectory for band diagram plotting ('gamma_centered' or 'standard', default: 'gamma_centered').
+    --k-max KMAX                Maximum wavevector radius |k|/(2π) for Gamma-centered k-path (default: 0.1).
+    --lam-min NM                Minimum wavelength limit in nm for physical wavelength band diagrams (default: 420.0 nm).
+    --lam-max NM                Maximum wavelength limit in nm for physical wavelength band diagrams (default: 450.0 nm).
+    --from-run DIR              Path to existing run directory to analyze without re-running optimization.
+    --threshold-percentile P    Cutoff percentile for surrogate locus extraction (default: 85.0).
+    --save-match-reference NAME Reference name to save locus match point dataset to 'saved_data/<name>'.
 """
 
 import argparse
 import json
 import select
+import shutil
 import sys
 import warnings
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 # Ensure repository root is in sys.path
 _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
+import matplotlib
+
+matplotlib.use("Agg")
 import gdsfactory as gf
 import meep as mp
 import numpy as np
@@ -96,6 +120,8 @@ from phc_mpb import (
 from phc_optimization import (
     BayesianOptimizer,
     ModalOverlapDegeneracyObjective,
+    OptimizationRecord,
+    OptimizationResult,
 )
 from phc_utils import export_gds, silence_c_stdout
 
@@ -144,6 +170,7 @@ def solve_unperturbed_reference_modes(
     resolution_z: int = 16,
     num_bands: int = 15,
     target_bands: Sequence[int] = (9, 10, 11),
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
     quick: bool = False,
     verbose: bool = True,
 ) -> tuple[
@@ -164,6 +191,7 @@ def solve_unperturbed_reference_modes(
         resolution_z: Vertical MPB computational grid resolution.
         num_bands: Number of eigenbands computed at Γ.
         target_bands: Sequence of 3 target reference band indices to extract.
+        overlap_mode: Spatial domain extraction formulation ('midplane', 'slab', or 'full').
         quick: If True, uses low resolution and lower band indices for smoke tests.
         verbose: If True, logs progress and extracted eigenfrequencies.
 
@@ -247,6 +275,7 @@ def solve_unperturbed_reference_modes(
             field="electric_displacement",
             slab_thickness=norm_h,
             z_center=0.0,
+            overlap_mode=overlap_mode,
         )
         if verbose:
             lam_nm = (pitch / f * 1000.0) if f > 0 else 0.0
@@ -292,6 +321,7 @@ def extract_optimal_point_fields(
     substrate_thickness: float | None = None,
     polarization: str = "all",
     target_bands: Sequence[int] = (2, 3, 4),
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
     verbose: bool = True,
 ) -> tuple[dict[int, tuple[np.ndarray, np.ndarray | None]], dict[int, float]]:
     """Solves the optimal unit cell at Γ and extracts spatial eigenmode fields (E and D).
@@ -309,6 +339,7 @@ def extract_optimal_point_fields(
         substrate_thickness: Substrate buffer thickness in units of a (or None).
         polarization: MPB polarization mode ('all', 'te_like', etc.).
         target_bands: Sequence of 1-based band indices to extract.
+        overlap_mode: Spatial domain extraction formulation ('midplane', 'slab', or 'full').
         verbose: Whether to log progress to stdout.
 
     Returns:
@@ -388,6 +419,7 @@ def extract_optimal_point_fields(
                 field="electric_displacement",
                 slab_thickness=norm_h,
                 z_center=0.0,
+                overlap_mode=overlap_mode,
             )
             fields_dict[b] = (e_field, d_field)
             if verbose:
@@ -413,6 +445,7 @@ def save_optimal_field_reference(
     substrate_thickness: float | None = None,
     polarization: str = "all",
     tracked_bands: Sequence[int] = (2, 3, 4),
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
     base_dir: Path | str = "saved_data",
 ) -> Path:
     """Saves the optimal point fields, geometry parameters, and GDS layout to saved_data/<name>/.
@@ -452,6 +485,7 @@ def save_optimal_field_reference(
         substrate_thickness=substrate_thickness,
         polarization=polarization,
         target_bands=tracked_bands,
+        overlap_mode=overlap_mode,
         verbose=True,
     )
 
@@ -486,6 +520,7 @@ def save_optimal_field_reference(
         },
         "polarization": polarization,
         "bands": list(tracked_bands),
+        "overlap_mode": overlap_mode,
         "frequencies": {str(b): f for b, f in freqs_dict.items()},
         "files": {
             "fields_npz": "fields.npz",
@@ -509,6 +544,223 @@ def save_optimal_field_reference(
     print(f"  - Fields:   {fields_file}")
     print(f"  - Metadata: {meta_file}")
     print(f"  - Layout:   {gds_file}")
+    return save_dir
+
+
+def save_match_point_reference(
+    name: str,
+    match_meta: dict[str, Any],
+    output_dir: Path | str,
+    base_dir: Path | str = "saved_data",
+    matrix_material: str = "hBN",
+    cladding_material: str = "air",
+    substrate_material: str | None = None,
+    substrate_thickness: float | None = None,
+    supercell_z: float = 4.0,
+    resolution: int = 18,
+    resolution_z: int = 16,
+    polarization: str = "all",
+    tracked_bands: Sequence[int] = (9, 10, 11),
+    p2: float = 0.25,
+    slab_thickness: float = 0.25,
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
+) -> Path:
+    """Saves the locus closest match point dataset, dispersion, fields, and metadata to saved_data/<name>/.
+
+    Args:
+        name: Subdirectory name for the saved reference dataset.
+        match_meta: Target match dictionary from locus analysis containing coordinates,
+            pitch, target wavelength, thickness, and solver results.
+        output_dir: Simulation output directory containing locus artifacts.
+        base_dir: Base directory where reference folders are stored (default: 'saved_data').
+        matrix_material: Slab core material key.
+        cladding_material: Top cladding material key.
+        substrate_material: Bottom substrate cladding material key (or None).
+        substrate_thickness: Substrate buffer thickness in units of a (or None).
+        supercell_z: Vertical supercell height in units of pitch a.
+        resolution: In-plane MPB computational grid resolution for field extraction.
+        resolution_z: Vertical MPB computational grid resolution for field extraction.
+        polarization: MPB polarization mode.
+        tracked_bands: Sequence of 1-based band indices to extract fields for.
+        p2: Coordinate parameter for 6d satellite holes.
+        slab_thickness: Normalized slab thickness h in units of pitch a.
+        overlap_mode: Spatial domain extraction formulation ('midplane', 'slab', or 'full').
+
+    Returns:
+        Path to the created saved_data/<name>/ directory.
+    """
+    save_dir = Path(base_dir).resolve() / name
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    r1 = float(match_meta.get("r1", 0.2))
+    r2 = float(match_meta.get("r2", 0.08))
+    pitch_nm = float(match_meta.get("pitch_nm", 1000.0))
+    pitch = float(match_meta.get("pitch", pitch_nm / 1000.0))
+    th_nm = float(match_meta.get("thickness_nm", 100.0))
+    norm_h = (
+        float(slab_thickness)
+        if slab_thickness is not None
+        else (th_nm / max(pitch_nm, 1e-12))
+    )
+
+    # 1. Save band dispersion array (copy from locus run if saved or build from solver_results)
+    disp_file = save_dir / "dispersion.npz"
+    disp_copied = False
+    out_p = Path(output_dir)
+    for cand_disp in [
+        out_p / "locus_match_dispersion.npz",
+        out_p / "locus_01" / "locus_01_match_dispersion.npz",
+    ]:
+        if cand_disp.exists():
+            shutil.copy2(cand_disp, disp_file)
+            disp_copied = True
+            break
+
+    if not disp_copied:
+        solver_results = match_meta.get("solver_results")
+        if solver_results:
+            disp_data: dict[str, Any] = {}
+            freqs = solver_results.get("freqs", {})
+            if isinstance(freqs, dict):
+                for k, v in freqs.items():
+                    if v is not None:
+                        disp_data[f"freqs_{k}"] = np.asarray(v)
+            elif freqs is not None:
+                disp_data["freqs"] = np.asarray(freqs)
+            if solver_results.get("k_points") is not None:
+                disp_data["k_points"] = np.asarray(solver_results["k_points"])
+            if solver_results.get("k_labels") is not None:
+                disp_data["k_labels"] = np.asarray(solver_results["k_labels"])
+            if solver_results.get("k_indices") is not None:
+                disp_data["k_indices"] = np.asarray(solver_results["k_indices"])
+            if solver_results.get("light_line") is not None:
+                disp_data["light_line"] = np.asarray(solver_results["light_line"])
+            if solver_results.get("te_fractions") is not None:
+                disp_data["te_fractions"] = np.asarray(solver_results["te_fractions"])
+            disp_data["pitch"] = np.asarray(pitch)
+            disp_data["pitch_nm"] = np.asarray(pitch_nm)
+            np.savez_compressed(disp_file, **disp_data)
+
+    # 2. Extract and save modal fields at Gamma
+    fields_dict: dict[int, tuple[np.ndarray, np.ndarray | None]] = {}
+    freqs_dict: dict[int, float] = {}
+    try:
+        match_params = {"r1": r1, "r2": r2, "p2": p2, "pitch": pitch}
+        fields_dict, freqs_dict = extract_optimal_point_fields(
+            params=match_params,
+            pitch=pitch,
+            slab_thickness=norm_h,
+            supercell_z=supercell_z,
+            resolution=resolution,
+            resolution_z=resolution_z,
+            matrix_material=matrix_material,
+            cladding_material=cladding_material,
+            substrate_material=substrate_material,
+            substrate_thickness=substrate_thickness,
+            polarization=polarization,
+            target_bands=tracked_bands,
+            overlap_mode=overlap_mode,
+            verbose=True,
+        )
+        npz_fields: dict[str, np.ndarray] = {}
+        for b, (e_arr, d_arr) in fields_dict.items():
+            if e_arr is not None:
+                npz_fields[f"e_{b}"] = e_arr
+            if d_arr is not None:
+                npz_fields[f"d_{b}"] = d_arr
+        fields_file = save_dir / "fields.npz"
+        np.savez_compressed(fields_file, **npz_fields)
+    except (RuntimeError, ValueError, KeyError, OSError) as e:
+        print(f"  Warning: Could not extract modal fields for match point: {e}")
+
+    # 3. Export layout GDS
+    comp = make_c6v_2b_6d_unit_cell(
+        r1=r1,
+        r2=r2,
+        p2=p2,
+        pitch=pitch,
+    )
+    gds_file = save_dir / "unit_cell.gds"
+    export_gds(comp, gds_file, overwrite=True)
+
+    # 4. Copy locus match figures if present
+    copied_files: dict[str, str] = {}
+    out_p = Path(output_dir)
+    for cand_dir in [out_p / "locus_01", out_p]:
+        if not cand_dir.exists():
+            continue
+        for f_name in [
+            "locus_01_match_band_structure.png",
+            "locus_01_match_band_structure_wavelength.png",
+            "locus_01_match_epsilon.png",
+            "locus_match_band_structure.png",
+            "locus_match_band_structure_wavelength.png",
+            "locus_match_epsilon.png",
+            "locus_dirac_frequency.png",
+            "locus_wavelength.png",
+            "locus_profile.png",
+        ]:
+            src_f = cand_dir / f_name
+            if src_f.exists() and not (save_dir / src_f.name).exists():
+                shutil.copy2(src_f, save_dir / src_f.name)
+                copied_files[src_f.stem] = src_f.name
+
+    # 5. Save metadata.json
+    meta = {
+        "name": name,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "type": "locus_match_point",
+        "geometry": {
+            "r1": r1,
+            "r2": r2,
+            "p": pitch,
+            "p2": p2,
+            "pitch_nm": pitch_nm,
+            "slab_thickness": norm_h,
+            "thickness_nm": th_nm,
+            "supercell_thickness": float(supercell_z),
+            "resolution": int(resolution),
+            "resolution_z": int(resolution_z),
+            "substrate_material": substrate_material,
+            "substrate_thickness": float(substrate_thickness)
+            if substrate_thickness is not None
+            else None,
+            "matrix_material": matrix_material,
+            "cladding_material": cladding_material,
+        },
+        "locus_characterization": {
+            "target_wavelength_nm": match_meta.get("target_wavelength_nm"),
+            "target_thickness_nm": match_meta.get("target_thickness_nm"),
+            "residual_thickness_error_nm": match_meta.get(
+                "residual_thickness_error_nm"
+            ),
+            "omega_d": match_meta.get("omega_d"),
+            "v_g_delta_omega": match_meta.get("v_g_delta_omega"),
+            "residual_gap": match_meta.get("residual_gap"),
+        },
+        "polarization": polarization,
+        "bands": list(tracked_bands),
+        "frequencies": {str(b): f for b, f in freqs_dict.items()},
+        "files": {
+            "dispersion_npz": "dispersion.npz"
+            if (save_dir / "dispersion.npz").exists()
+            else None,
+            "fields_npz": "fields.npz" if (save_dir / "fields.npz").exists() else None,
+            "unit_cell_gds": "unit_cell.gds",
+            **copied_files,
+        },
+    }
+    meta_file = save_dir / "metadata.json"
+    with open(meta_file, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"\n[Saved] Locus match point data successfully saved to '{save_dir}':")
+    if (save_dir / "dispersion.npz").exists():
+        print(f"  - Dispersion: {save_dir / 'dispersion.npz'}")
+    if (save_dir / "fields.npz").exists():
+        print(f"  - Fields:     {save_dir / 'fields.npz'}")
+    print(f"  - Metadata:   {meta_file}")
+    print(f"  - Layout:     {gds_file}")
     return save_dir
 
 
@@ -563,6 +815,147 @@ def load_saved_reference_data(
     return fields, freqs, bands, meta
 
 
+def load_run_records(
+    run_dir: Path | str,
+    enforce_irreps: bool = False,
+    target_irreps: Sequence[str] | None = None,
+) -> tuple[list[OptimizationRecord], dict[str, Any]]:
+    """Loads optimization evaluation records and simulation metadata from an existing run directory.
+
+    When enforce_irreps is True and target_irreps is provided, audits each evaluation's
+    tracked modes against the point-group representation requirements. If an evaluation
+    tracked alien or mismatched modes (e.g. accidental E2/B1 crossings), it resolves the
+    correct target multiplet from the evaluation's symmetry data or penalizes the evaluation.
+
+    Args:
+        run_dir: Path to the existing run directory containing bo_evaluations.json.
+        enforce_irreps: If True, audits and reconciles evaluation irreps against target_irreps.
+        target_irreps: Target point-group representations forming the multiplet (e.g. ['A_2', 'E_1', 'E_1']).
+
+    Returns:
+        Tuple of (records_list, summary_metadata_dict).
+
+    Raises:
+        FileNotFoundError: If bo_evaluations.json is missing in run_dir.
+    """
+    p = Path(run_dir).resolve()
+    eval_file = p / "bo_evaluations.json"
+    sim_file = p / "simulation_results.json"
+    if not eval_file.is_file():
+        raise FileNotFoundError(
+            f"Run directory '{p}' does not contain 'bo_evaluations.json'."
+        )
+
+    with open(eval_file, encoding="utf-8") as f:
+        data = json.load(f)
+
+    sim_meta: dict[str, Any] = {}
+    if sim_file.is_file():
+        with open(sim_file, encoding="utf-8") as f:
+            sim_meta = json.load(f)
+
+    import itertools
+    from collections import Counter
+
+    from phc_mpb.classification import resolve_target_irrep_counts
+
+    target_counts = (
+        resolve_target_irrep_counts(target_irreps, len(target_irreps))
+        if enforce_irreps and target_irreps
+        else None
+    )
+
+    records: list[OptimizationRecord] = []
+    evals = data.get("evaluations", []) if isinstance(data, dict) else data
+    corrected_count = 0
+
+    for ev in evals:
+        cost = float(ev.get("cost", 1.0))
+        fom = float(ev.get("fom", 1.0))
+        status = str(ev.get("status", ""))
+        metadata = dict(ev)
+
+        if target_counts:
+            syms = ev.get(
+                "symmetries",
+                ev.get("metadata", {}).get("solver_data", {}).get("symmetries", []),
+            )
+            if syms and target_irreps:
+                from phc_mpb.symmetry import resolve_multiplet_symmetries
+
+                syms = resolve_multiplet_symmetries(
+                    syms, target_irreps=list(target_irreps)
+                )
+
+            tb = ev.get("target_bands", ev.get("metadata", {}).get("target_bands", []))
+            band_irreps = {
+                s["band"]: s["irrep"] for s in syms if "band" in s and "irrep" in s
+            }
+            band_freqs = {
+                s["band"]: s["freq"] for s in syms if "band" in s and "freq" in s
+            }
+
+            current_irreps = Counter([band_irreps.get(b) for b in tb])
+            if band_irreps and current_irreps != target_counts:
+                # Find valid cluster matching target_counts
+                k_target = sum(target_counts.values())
+                valid_clusters = []
+                bands = sorted(band_irreps.keys())
+                for i in range(len(bands)):
+                    for combo in itertools.combinations(bands[i : i + 5], k_target):
+                        if (
+                            combo[-1] - combo[0] <= 4
+                            and Counter([band_irreps[b] for b in combo])
+                            == target_counts
+                        ):
+                            f_vals = [band_freqs[b] for b in combo]
+                            f_mid = sum(f_vals) / max(len(f_vals), 1)
+                            if f_mid > 0.5:
+                                c = (max(f_vals) - min(f_vals)) / max(f_mid, 1e-12)
+                                valid_clusters.append(
+                                    (combo, f_mid, c, 1.0 / max(c, 1e-12))
+                                )
+
+                if valid_clusters:
+                    valid_clusters.sort(key=lambda x: x[2])
+                    best = valid_clusters[0]
+                    cost = float(best[2])
+                    fom = float(best[3])
+                    status = f"RECONCILED (Bands {list(best[0])} matching {list(target_irreps or [])})"
+                    metadata["target_bands"] = list(best[0])
+                    metadata["cost"] = cost
+                    metadata["fom"] = fom
+                    metadata["irrep_match"] = True
+                else:
+                    cost = 1.0
+                    fom = 1.0
+                    status = f"PENALIZED (Irrep mismatch: no valid {list(target_irreps or [])} cluster)"
+                    metadata["cost"] = cost
+                    metadata["fom"] = fom
+                    metadata["irrep_match"] = False
+                corrected_count += 1
+
+        rec = OptimizationRecord(
+            eval_index=ev.get("eval_index", len(records) + 1),
+            generation=ev.get("generation", 0),
+            params=ev.get("params", {}),
+            cost=cost,
+            fom=fom,
+            status=status,
+            connectivity=str(ev.get("connectivity", "PASSED")),
+            timing=ev.get("timing", {}),
+            metadata=metadata,
+        )
+        records.append(rec)
+
+    if corrected_count > 0:
+        print(
+            f"\n--- Enforce Irreps: Reconciled {corrected_count}/{len(records)} evaluations with mismatched irreps ---"
+        )
+
+    return records, sim_meta
+
+
 def run_c6v_optimization_pipeline(
     quick: bool = False,
     slab_thickness: float | None = 0.25,
@@ -590,16 +983,28 @@ def run_c6v_optimization_pipeline(
     reference_p2: float = 0.25,
     output_dir: Path | str | None = None,
     show_progress: bool = True,
-    analyze_locus: bool = False,
+    find_loci: int | str = 1,
+    analyze_locus: bool | Sequence[int | str] | int | str | None = None,
+    threshold_percentile: float = 85.0,
+    from_run: str | Path | None = None,
     mode_indices: tuple[int, int, int] = (9, 10, 11),
     target_irreps: Sequence[str] = ("A_2", "E_1", "E_1"),
     irrep_occurrences: Sequence[int] = (1, 4, 4),
+    enforce_irreps: bool = True,
     target_wavelength_nm: float = 436.0,
     target_thickness_nm: float = 100.0,
     r1_bounds: tuple[float, float] = (0.15, 0.25),
     r2_bounds: tuple[float, float] = (0.05, 0.10),
     locus_mode: str = "cartesian",
+    force_open: bool = True,
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
+    interpolate: bool = True,
     max_refine_steps: int = 5,
+    tracking_strategy: str = "cluster",
+    kpath_type: str = "gamma_centered",
+    k_max: float = 0.1,
+    lam_min_nm: float = 420.0,
+    lam_max_nm: float = 450.0,
 ) -> dict[str, Any]:
     """Runs the Bayesian Optimization pipeline for the C6v 2b-6d unit cell.
 
@@ -622,6 +1027,7 @@ def run_c6v_optimization_pipeline(
         substrate_material: Substrate cladding material key (e.g. "sio2", default: None / "air").
         substrate_thickness: Substrate buffer thickness in units of pitch a (default: 2.0).
         match_reference_modes: If True, tracks 3 unperturbed reference modes via spatial overlap.
+        reference_data: Path to pre-saved reference dataset directory in 'saved_data/<name>'.
         reference_run: Optional directory of previous unperturbed run to load reference parameters.
         reference_bands: Sequence of 3 reference band indices at Gamma (default: (9, 10, 11)).
         reference_r1: Optional explicit r1 for unperturbed reference cell.
@@ -629,7 +1035,8 @@ def run_c6v_optimization_pipeline(
         reference_p2: Coordinate parameter p2 for unperturbed reference cell (default: 0.25).
         output_dir: Custom output directory or None to auto-resolve via phc_hydra.
         show_progress: Whether to display a real-time progress bar.
-        analyze_locus: If True, refines the continuous degeneracy locus manifold.
+        find_loci: Number of degeneracy loci to detect on surrogate map: int or 'auto' (default: 1).
+        analyze_locus: Locus ID(s) to refine (e.g. 1, [1, 2], True for [1], or None to skip).
         mode_indices: 1-based indices of target degenerate bands at Gamma (default: [9, 10, 11]).
         target_irreps: Target irreducible representations at Gamma (default: ('A_2', 'E_1', 'E_1')).
         irrep_occurrences: Occurrence index per target irrep above min_band (default: (1, 4, 4)).
@@ -639,6 +1046,14 @@ def run_c6v_optimization_pipeline(
         r2_bounds: Search range for satellite hole radius r2 in units of a (default: (0.05, 0.10)).
         max_refine_steps: Maximum number of refinement steps for the degeneracy locus (default: 5).
         locus_mode: Mode for degeneracy locus refinement ('cartesian' or 'polar' or 'auto').
+        force_open: If True (default), forces the degeneracy locus curve to remain an open path.
+        overlap_mode: Spatial domain extraction formulation ('midplane' [default], 'slab', or 'full').
+        interpolate: If True (default), enables spatial field interpolation across mismatched mesh resolutions.
+        tracking_strategy: Mode tracking algorithm ('cluster', 'bipartite', or 'greedy'). Default: 'cluster'.
+        kpath_type: K-path trajectory for band diagram: 'gamma_centered' (default) or 'standard'.
+        k_max: Maximum Cartesian wavevector radius |k|/(2π) for Gamma-centered k-path (default: 0.1).
+        lam_min_nm: Minimum physical wavelength limit in nm for band diagrams (default: 420.0 nm).
+        lam_max_nm: Maximum physical wavelength limit in nm for band diagrams (default: 450.0 nm).
 
     Returns:
         Dictionary containing best parameters, best FOM, residual cost, optimal loci,
@@ -679,8 +1094,8 @@ def run_c6v_optimization_pipeline(
         default_num_bands = 28 if has_substrate else 15
         default_initial_points = 100
         default_max_iterations = 0
-        default_batch_size = 4
         default_num_workers = 20
+        default_batch_size = None
         bypass_irrep = False
 
     res_val = resolution if resolution is not None else default_resolution
@@ -688,8 +1103,8 @@ def run_c6v_optimization_pipeline(
     bands_val = num_bands if num_bands is not None else default_num_bands
     init_pts = initial_points if initial_points is not None else default_initial_points
     max_iters = max_iterations if max_iterations is not None else default_max_iterations
-    b_size = batch_size if batch_size is not None else default_batch_size
     n_workers = num_workers if num_workers is not None else default_num_workers
+    b_size = batch_size if batch_size is not None else (default_batch_size or n_workers)
 
     # Configure parameter search bounds
     if vary_p2:
@@ -793,6 +1208,7 @@ def run_c6v_optimization_pipeline(
                 resolution_z=res_z_val,
                 num_bands=max(15, max(resolved_ref_bands) + 4) if not quick else 6,
                 target_bands=resolved_ref_bands,
+                overlap_mode=overlap_mode,
                 quick=quick,
                 verbose=show_progress,
             )
@@ -808,8 +1224,13 @@ def run_c6v_optimization_pipeline(
             if slab_thickness is not None
             else 0.25,
             pitch=1.0,
+            overlap_mode=overlap_mode,
+            interpolate=interpolate,
             min_overlap_threshold=0.25 if not quick else 0.05,
             symmetry_group="C6v",
+            tracking_strategy=tracking_strategy,
+            target_irreps=list(target_irreps),
+            enforce_irreps=enforce_irreps,
         )
         obj_arg: Any = obj_instance
         obj_kwargs: dict[str, Any] | None = None
@@ -833,6 +1254,20 @@ def run_c6v_optimization_pipeline(
 
     sub_tag = f"_{sub_mat_key.lower()}" if has_substrate and sub_mat_key else ""
     geo_name = f"c6v_2b_6d_{dim.lower()}{sub_tag}"
+
+    loaded_records = None
+    if from_run is not None:
+        run_p = Path(from_run).resolve()
+        loaded_records, _sim_meta = load_run_records(
+            run_p,
+            enforce_irreps=enforce_irreps,
+            target_irreps=list(target_irreps),
+        )
+        print(
+            f"\n--- Loaded {len(loaded_records)} evaluations from existing run '{run_p.name}' ---"
+        )
+        if output_dir is None:
+            output_dir = run_p
 
     opt = BayesianOptimizer(
         cell_factory=make_c6v_2b_6d_unit_cell,
@@ -861,36 +1296,91 @@ def run_c6v_optimization_pipeline(
         geometry_name=geo_name,
         random_state=42,
         show_progress=show_progress,
+        find_loci=find_loci,
     )
 
-    result = opt.run(show_progress=show_progress)
-    if not quick:
-        opt.run_best(
-            plot_eps=True,
-            plot_bands=True,
-            save_plots=True,
-            best_params=None,
-            rectify=True,
-            periods=3,
-            grid_resolution=32,
-            k_density=20,
-            num_workers=n_workers,
+    if loaded_records is not None:
+        opt.records = loaded_records
+        opt.output_dir = Path(output_dir).resolve()
+        valid_recs = [r for r in loaded_records if r.connectivity != "FAILED"]
+        best_rec = (
+            max(valid_recs, key=lambda r: r.fom) if valid_recs else loaded_records[0]
         )
+        result = OptimizationResult(
+            best_params=best_rec.params,
+            best_fom=best_rec.fom,
+            best_cost=best_rec.cost,
+            records=loaded_records,
+            gp_model=None,
+            output_dir=opt.output_dir,
+        )
+        if len(opt.param_names) == 2:
+            from phc_optimization.plotting import plot_bo_surrogate_map
+
+            plot_bo_surrogate_map(
+                optimizer=opt.optimizer,
+                records=loaded_records,
+                param_names=opt.param_names,
+                output_path=opt.output_dir / "bo_surrogate_map.png",
+                max_loci=find_loci,
+            )
+    else:
+        result = opt.run(show_progress=show_progress)
+        if not quick:
+            opt.run_best(
+                plot_eps=True,
+                plot_bands=True,
+                save_plots=True,
+                best_params=None,
+                rectify=True,
+                periods=3,
+                grid_resolution=32,
+                k_density=20,
+                num_workers=n_workers,
+                kpath_type=kpath_type,
+                k_max=k_max,
+                lam_min=lam_min_nm / 1000.0,
+                lam_max=lam_max_nm / 1000.0,
+            )
 
     locus_results = []
     if analyze_locus:
+        refine_ids: int | str | list[int]
+        if analyze_locus is True:
+            refine_ids = [1]
+        elif isinstance(analyze_locus, str) and analyze_locus.lower() in (
+            "all",
+            "auto",
+        ):
+            refine_ids = "all"
+        elif isinstance(analyze_locus, int):
+            refine_ids = [analyze_locus]
+        elif isinstance(analyze_locus, (list, tuple, set)) and any(
+            str(x).lower() in ("all", "auto") for x in analyze_locus
+        ):
+            refine_ids = "all"
+        else:
+            refine_ids = [int(x) for x in analyze_locus]
         locus_results = opt.analyze_locus(
+            refine_loci=refine_ids,
+            max_loci=find_loci,
+            threshold_percentile=threshold_percentile,
             delta_k=0.01,
             exclude_unrefined=False,
             max_residual_gap=1e-4,
             max_refine_steps=max_refine_steps,
             mode=locus_mode,
+            force_open=force_open,
             num_workers=n_workers,
             target_wavelength_nm=target_wavelength_nm,
             target_thickness_nm=target_thickness_nm,
             sample_points=20 if not quick else 3,
             plot_match_bands=not quick,
             k_density_match=20 if not quick else 6,
+            kpath_type=kpath_type,
+            k_max=k_max,
+            lam_min=lam_min_nm / 1000.0,
+            lam_max=lam_max_nm / 1000.0,
         )
 
     loci_file = result.output_dir / "optimal_loci.json"
@@ -1097,6 +1587,12 @@ def main() -> None:
         help="Reference name to save optimal point modal fields directly to 'saved_data/<name>' without prompting.",
     )
     parser.add_argument(
+        "--save-match-reference",
+        type=str,
+        default=None,
+        help="Reference name to save locus match point dataset directly to 'saved_data/<name>' without prompting.",
+    )
+    parser.add_argument(
         "--reference-run",
         type=str,
         default=None,
@@ -1139,6 +1635,12 @@ def main() -> None:
         nargs="+",
         default=["A_2", "E_1", "E_1"],
         help="Target irreducible representations at Gamma (default: A_2 E_1 E_1).",
+    )
+    parser.add_argument(
+        "--enforce-irreps",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enforce that tracked bands match target point-group irreps, penalizing alien representations (default: True).",
     )
     parser.add_argument(
         "--irrep-occurrences",
@@ -1210,6 +1712,12 @@ def main() -> None:
         help="Number of parallel worker processes (default: 20, quick: 1).",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Number of candidate points evaluated per BO generation (default: matches --workers).",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
@@ -1221,9 +1729,20 @@ def main() -> None:
         help="Disable the real-time progress bar.",
     )
     parser.add_argument(
+        "--find-loci",
+        default="1",
+        help="Number of degeneracy loci to detect on the GP surrogate map: an integer (e.g. 1, 2) or 'auto' (default: 1).",
+    )
+    parser.add_argument(
         "--analyze-locus",
-        action="store_true",
-        help="Refine continuous degeneracy locus curve and compute adjacent group velocity.",
+        nargs="*",
+        default=None,
+        metavar="IDX",
+        help=(
+            "Refine continuous degeneracy locus curve(s) and compute adjacent group velocity. "
+            "Accepts one or more locus IDs (e.g. '--analyze-locus', '--analyze-locus 2', '--analyze-locus 1 2'). "
+            "Defaults to [1] if passed without arguments; omitted means do not refine."
+        ),
     )
     parser.add_argument(
         "--locus-mode",
@@ -1233,10 +1752,77 @@ def main() -> None:
         help="Mode for degeneracy locus refinement (default: cartesian).",
     )
     parser.add_argument(
+        "--force-open",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Force degeneracy locus manifold to be an open curve (default: True).",
+    )
+    parser.add_argument(
         "--max-refine-steps",
         type=int,
         default=5,
         help="Maximum number of refinement steps for the degeneracy locus (default: 5).",
+    )
+    parser.add_argument(
+        "--tracking-strategy",
+        type=str,
+        default="cluster",
+        choices=["cluster", "bipartite", "greedy"],
+        help="Target mode tracking algorithm: 'cluster' (multiplet cohesion, default), 'bipartite' (Hungarian matching), or 'greedy' (subspace projection).",
+    )
+    parser.add_argument(
+        "--kpath-type",
+        type=str,
+        default="gamma_centered",
+        choices=["gamma_centered", "standard"],
+        help="K-path trajectory for band diagram plotting: 'gamma_centered' (default) or 'standard'.",
+    )
+    parser.add_argument(
+        "--k-max",
+        type=float,
+        default=0.1,
+        help="Maximum Cartesian wavevector radius |k|/(2π) for Gamma-centered k-path (default: 0.1).",
+    )
+    parser.add_argument(
+        "--lam-min",
+        type=float,
+        default=420.0,
+        help="Minimum wavelength limit in nm for physical wavelength band diagrams (default: 420.0 nm).",
+    )
+    parser.add_argument(
+        "--lam-max",
+        type=float,
+        default=450.0,
+        help="Maximum wavelength limit in nm for physical wavelength band diagrams (default: 450.0 nm).",
+    )
+    parser.add_argument(
+        "--overlap-mode",
+        type=str,
+        default="midplane",
+        choices=["midplane", "slab", "full"],
+        help=(
+            "Spatial overlap formulation: 'midplane' (2D z=0 mid-plane slice, "
+            "invariant to slab thickness h/a, default), 'slab' (3D masked slab core |z| <= h/2), "
+            "or 'full' (full 3D supercell)."
+        ),
+    )
+    parser.add_argument(
+        "--interpolate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable automatic field interpolation across mismatched mesh resolutions for mode matching (default: True).",
+    )
+    parser.add_argument(
+        "--from-run",
+        type=str,
+        default=None,
+        help="Path to an existing optimization run directory to analyze without re-running optimization.",
+    )
+    parser.add_argument(
+        "--threshold-percentile",
+        type=float,
+        default=85.0,
+        help="Cutoff percentile (e.g. 80.0 or 85.0) for surrogate locus ridge extraction (default: 85.0).",
     )
     args = parser.parse_args()
 
@@ -1261,7 +1847,7 @@ def main() -> None:
         print(f" Substrate: {sub_mat} (thickness = {args.substrate_thickness} a)")
     if args.match_reference_modes:
         print(
-            f" Mode Matching: Modal overlap tracking 3 reference modes (bands {args.reference_bands})"
+            f" Mode Matching: Modal overlap tracking 3 reference modes (bands {args.reference_bands}, overlap_mode: {args.overlap_mode})"
         )
     else:
         print(
@@ -1276,6 +1862,22 @@ def main() -> None:
     )
     print("=" * 72)
 
+    find_loci_raw = str(args.find_loci).strip()
+    find_loci_val: int | str = (
+        "auto" if find_loci_raw.lower() == "auto" else int(find_loci_raw)
+    )
+
+    if args.analyze_locus is None:
+        analyze_locus_arg = None
+    elif len(args.analyze_locus) == 0:
+        analyze_locus_arg = [1]
+    elif any(str(x).lower() in ("all", "auto") for x in args.analyze_locus):
+        analyze_locus_arg = "all"
+        if find_loci_val == 1:
+            find_loci_val = "auto"
+    else:
+        analyze_locus_arg = [int(x) for x in args.analyze_locus]
+
     res = run_c6v_optimization_pipeline(
         quick=args.quick,
         slab_thickness=args.slab_thickness,
@@ -1287,6 +1889,7 @@ def main() -> None:
         num_bands=args.num_bands,
         initial_points=args.initial_points,
         max_iterations=args.max_iterations,
+        batch_size=args.batch_size,
         num_workers=args.workers,
         matrix_material=args.matrix_material,
         cladding_material=args.cladding_material,
@@ -1301,14 +1904,26 @@ def main() -> None:
         reference_p2=args.reference_p2,
         output_dir=args.output_dir,
         show_progress=not args.no_progress,
-        analyze_locus=args.analyze_locus,
+        find_loci=find_loci_val,
+        analyze_locus=analyze_locus_arg,
+        threshold_percentile=args.threshold_percentile,
+        from_run=args.from_run,
         locus_mode=args.locus_mode,
+        force_open=args.force_open,
+        overlap_mode=args.overlap_mode,
+        interpolate=args.interpolate,
         target_irreps=args.target_irreps,
         irrep_occurrences=args.irrep_occurrences,
+        enforce_irreps=args.enforce_irreps,
         target_wavelength_nm=args.target_wavelength,
         target_thickness_nm=args.target_thickness,
         r1_bounds=tuple(args.r1_bounds),
         r2_bounds=tuple(args.r2_bounds),
+        tracking_strategy=args.tracking_strategy,
+        kpath_type=args.kpath_type,
+        k_max=args.k_max,
+        lam_min_nm=args.lam_min,
+        lam_max_nm=args.lam_max,
     )
 
     print("\n" + "=" * 72)
@@ -1352,6 +1967,12 @@ def main() -> None:
                 )
                 print(
                     "                      locus_match_band_structure_wavelength.png (physical)"
+                )
+                print(
+                    "    Locus Diagrams:   locus_dirac_frequency.png (ω~_D vs s & samples)"
+                )
+                print(
+                    "                      locus_wavelength.png (λ vs samples: match h vs target h)"
                 )
     if res.get("physical_analysis"):
         pa = res["physical_analysis"]
@@ -1430,7 +2051,76 @@ def main() -> None:
             substrate_thickness=float(args.substrate_thickness) if sub_mat else None,
             polarization=res.get("polarization", "all" if sub_mat else "te_like"),
             tracked_bands=opt_bands,
+            overlap_mode=args.overlap_mode,
         )
+
+    # -------------------------------------------------------------
+    # Interactive Locus Match Point Reference Storage Prompt (60s timer)
+    # -------------------------------------------------------------
+    first_match_meta = None
+    if res.get("refined_loci"):
+        for loc in res["refined_loci"]:
+            if "target_match" in loc:
+                first_match_meta = loc["target_match"]
+                break
+
+    save_match_name = args.save_match_reference
+    if first_match_meta is not None:
+        if save_match_name is None and sys.stdin.isatty():
+            print("\n" + "=" * 72)
+            print(" Save Locus Match Point Data ")
+            print("=" * 72)
+            ans_m = timed_input(
+                "Do you want to store the match point data of the locus to 'saved_data'? [y/N] (Auto-skips in 60s): ",
+                timeout=60.0,
+            )
+            if ans_m and ans_m.lower() in ("y", "yes"):
+                ts_str = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+                default_match_name = f"c6v_match_{ts_str}"
+                user_match_name = timed_input(
+                    f"Enter match reference name [default: {default_match_name}] (Auto-skips in 60s): ",
+                    timeout=60.0,
+                )
+                save_match_name = (
+                    user_match_name.strip()
+                    if user_match_name and user_match_name.strip()
+                    else default_match_name
+                )
+
+        if save_match_name:
+            res_val = (
+                args.resolution
+                if args.resolution is not None
+                else (12 if args.quick else 18)
+            )
+            res_z_val = (
+                args.resolution_z
+                if args.resolution_z is not None
+                else (6 if args.quick else 16)
+            )
+            opt_bands = res.get("tracked_bands") or args.reference_bands
+            save_match_point_reference(
+                name=save_match_name,
+                match_meta=first_match_meta,
+                output_dir=res["output_dir"],
+                base_dir="saved_data",
+                matrix_material=args.matrix_material,
+                cladding_material=args.cladding_material,
+                substrate_material=sub_mat,
+                substrate_thickness=float(args.substrate_thickness)
+                if sub_mat
+                else None,
+                supercell_z=float(args.supercell_z),
+                resolution=res_val,
+                resolution_z=res_z_val,
+                polarization=res.get("polarization", "all" if sub_mat else "te_like"),
+                tracked_bands=opt_bands,
+                p2=float(args.reference_p2) if args.reference_p2 is not None else 0.25,
+                slab_thickness=float(args.slab_thickness)
+                if args.slab_thickness is not None
+                else 0.25,
+                overlap_mode=args.overlap_mode,
+            )
 
 
 if __name__ == "__main__":

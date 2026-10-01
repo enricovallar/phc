@@ -60,8 +60,8 @@ def plot_band_structure(
     pitch: float | None = None,
     pitch_um: float | None = None,
     lattice_constant: float | None = None,
-    lam_min: float = 0.3,
-    lam_max: float = 0.6,
+    lam_min: float = 0.42,
+    lam_max: float = 0.45,
     ylim: tuple[float, float] | None = None,
     ylabel: str | None = None,
     k_labels: list[str] | None = None,
@@ -73,7 +73,7 @@ def plot_band_structure(
     te_fractions: np.ndarray | dict[str, np.ndarray] | None = None,
     cmap: str = "coolwarm_r",
     ax: plt.Axes | None = None,
-    plot_gaps: bool = True,
+    plot_gaps: bool = False,
     alpha: float | dict[str, float] = 1.0,
     hollow_fractions: bool = True,
     edge_linewidth: float = 1.0,
@@ -98,9 +98,9 @@ def plot_band_structure(
     When `normalize=False`, converts frequencies to physical free-space wavelengths
     in micrometers (um) via lambda = pitch / omega_tilde, using the lattice pitch, and
     updates the y-axis label to reflect wavelength in um. By default, the y-axis spans
-    from `lam_min` (0.3 um) to `lam_max` (0.6 um) unless `ylim` is specified.
+    from `lam_min` (0.42 um) to `lam_max` (0.45 um) unless `ylim` is specified.
 
-    Highlights complete omnidirectional band gaps with gold shading and percentage labels.
+    If `plot_gaps=True`, highlights complete omnidirectional band gaps with gold shading and percentage labels.
     If light line data is present in results, plots the light line and shades the radiative light cone.
 
     Args:
@@ -121,7 +121,7 @@ def plot_band_structure(
             keyword argument `k_indices`.
         title: Plot title displayed at top of figure.
         save_path: Optional file path (PNG, PDF, SVG) where figure will be saved.
-            Parent directories are created automatically if they do not exist.
+        Parent directories are created automatically if they do not exist.
         normalize: If True (default), plots dimensionless normalized frequency
             omega * a / (2 * pi * c) = a / lambda. If False, plots physical wavelength
             lambda_0 in micrometers (um), converting via lambda = pitch / omega_tilde.
@@ -130,9 +130,9 @@ def plot_band_structure(
         pitch_um: Alias for `pitch`.
         lattice_constant: Alias for `pitch`.
         lam_min: Minimum wavelength limit in micrometers (um) for y-axis when normalize=False
-            and ylim is None (default: 0.3).
+            and ylim is None (default: 0.42).
         lam_max: Maximum wavelength limit in micrometers (um) for y-axis when normalize=False
-            and ylim is None (default: 0.6).
+            and ylim is None (default: 0.45).
         ylim: Optional manual y-axis limits tuple `(y_min, y_max)`.
         ylabel: Optional custom y-axis label string overriding the automatic label.
         k_labels: Alias for `node_labels`.
@@ -522,10 +522,11 @@ def replot_band_structure_from_results(
     *,
     normalize: bool = True,
     pitch: float | None = None,
-    lam_min: float = 0.3,
-    lam_max: float = 0.6,
+    lam_min: float = 0.42,
+    lam_max: float = 0.45,
     ylim: tuple[float, float] | None = None,
     ylabel: str | None = None,
+    plot_gaps: bool = False,
     marker: str | dict[str, str] | None = None,
     markers: dict[str, str] | None = None,
     markersize: float | dict[str, float] | None = None,
@@ -556,10 +557,11 @@ def replot_band_structure_from_results(
             If False, plots physical wavelength in micrometers (um), converting via lambda = pitch / omega_tilde.
         pitch: Optional lattice constant pitch in micrometers (um). If None, automatically
             inferred from the saved JSON geometry.
-        lam_min: Minimum wavelength limit in micrometers (um) when normalize=False (default: 0.3).
-        lam_max: Maximum wavelength limit in micrometers (um) when normalize=False (default: 0.6).
+        lam_min: Minimum wavelength limit in micrometers (um) when normalize=False (default: 0.42).
+        lam_max: Maximum wavelength limit in micrometers (um) when normalize=False (default: 0.45).
         ylim: Optional manual y-axis limits tuple `(y_min, y_max)`.
         ylabel: Optional custom y-axis label string overriding the automatic label.
+        plot_gaps: Whether to highlight complete omnidirectional band gaps (default: False).
         marker: Single marker or marker dictionary for polarization modes.
         markers: Optional dictionary mapping polarization keys to marker styles.
         markersize: Size of markers in points or dict per polarization.
@@ -667,6 +669,7 @@ def replot_band_structure_from_results(
         colors=colors,
         cmap=cmap,
         ax=ax,
+        plot_gaps=plot_gaps,
         hollow_fractions=hollow_fractions,
         edge_linewidth=edge_linewidth,
         filter_artifacts=filter_artifacts,

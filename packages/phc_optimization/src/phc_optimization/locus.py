@@ -13,6 +13,7 @@ Algorithms:
 """
 
 import csv
+import heapq
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -128,15 +129,24 @@ def skeletonize_mask(mask: np.ndarray) -> np.ndarray:
 
 
 def order_skeleton_points(
-    pts_x: np.ndarray, pts_y: np.ndarray
+    pts_x: np.ndarray,
+    pts_y: np.ndarray,
+    fom_values: np.ndarray | None = None,
+    force_open: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Orders 2D skeleton pixel coordinates into a continuous sequential trajectory.
 
-    Handles both open branches (endpoint-to-endpoint) and closed circular loops.
+    Extracts the principal 1D backbone trajectory between extreme endpoints using Dijkstra
+    pathfinding, pruning side spurs and avoiding looping or doubling-back. Handles both open
+    branches (endpoint-to-endpoint) and closed circular loops. If `force_open` is True,
+    prevents closing loops into cycles and cuts closed rings at the point of lowest FOM so
+    they traverse as an open 1D arc.
 
     Args:
         pts_x: 1D array of x-coordinates.
         pts_y: 1D array of y-coordinates.
+        fom_values: Optional 1D array of FOM values corresponding to skeleton points.
+        force_open: If True (default), forces the trajectory to remain an open path without wrapping.
 
     Returns:
         Tuple of (ordered_x, ordered_y) arrays.
@@ -153,50 +163,108 @@ def order_skeleton_points(
     nonzero_y = diffs_y[diffs_y > 1e-9]
     dx = float(np.min(nonzero_x)) if nonzero_x.size > 0 else 1.0
     dy = float(np.min(nonzero_y)) if nonzero_y.size > 0 else 1.0
-    diag_step = 1.5 * np.hypot(dx, dy)
+    diag_step = 1.2 * np.hypot(dx, dy)
 
-    # Build adjacency list
-    adj: list[list[int]] = [[] for _ in range(n)]
+    # Build weighted adjacency list
+    adj: list[list[tuple[int, float]]] = [[] for _ in range(n)]
     for i in range(n):
         for j in range(i + 1, n):
-            d = np.hypot(pts_x[i] - pts_x[j], pts_y[i] - pts_y[j])
+            d = float(np.hypot(pts_x[i] - pts_x[j], pts_y[i] - pts_y[j]))
             if d <= diag_step:
-                adj[i].append(j)
-                adj[j].append(i)
+                adj[i].append((j, d))
+                adj[j].append((i, d))
 
     # Identify degree-1 endpoints (for open branches)
     deg1 = [i for i, nbrs in enumerate(adj) if len(nbrs) == 1]
-    start = deg1[0] if deg1 else 0
 
-    visited = {start}
-    path = [start]
-    curr = start
-    while len(visited) < n:
-        unvisited_nbrs = [nbr for nbr in adj[curr] if nbr not in visited]
-        if unvisited_nbrs:
-            next_node = min(
-                unvisited_nbrs,
-                key=lambda j: np.hypot(pts_x[curr] - pts_x[j], pts_y[curr] - pts_y[j]),
-            )
-        else:
-            unvisited_all = [i for i in range(n) if i not in visited]
-            next_node = min(
-                unvisited_all,
-                key=lambda j: np.hypot(pts_x[curr] - pts_x[j], pts_y[curr] - pts_y[j]),
-            )
-        visited.add(next_node)
-        path.append(next_node)
-        curr = next_node
+    def dijkstra(start_node: int) -> tuple[dict[int, float], dict[int, int | None]]:
+        dist: dict[int, float] = {start_node: 0.0}
+        prev: dict[int, int | None] = {start_node: None}
+        pq: list[tuple[float, int]] = [(0.0, start_node)]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if d > dist[u]:
+                continue
+            for v, w in adj[u]:
+                if v not in dist or d + w < dist[v]:
+                    dist[v] = d + w
+                    prev[v] = u
+                    heapq.heappush(pq, (dist[v], v))
+        return dist, prev
 
-    if not deg1:
+    if len(deg1) >= 2:
+        best_len = -1.0
+        best_path: list[int] = [deg1[0]]
+        for src in deg1:
+            dist, prev = dijkstra(src)
+            for dst in deg1:
+                if dst != src and dst in dist and dist[dst] > best_len:
+                    best_len = dist[dst]
+                    curr: int | None = dst
+                    p = []
+                    while curr is not None:
+                        p.append(curr)
+                        curr = prev[curr]
+                    best_path = p
+        path = best_path
+    elif len(deg1) == 1:
+        dist, prev = dijkstra(deg1[0])
+        farthest = max(dist.keys(), key=lambda k: dist[k])
+        curr = farthest
+        p = []
+        while curr is not None:
+            p.append(curr)
+            curr = prev[curr]
+        path = p
+    elif force_open:
+        start = (
+            int(np.argmin(fom_values))
+            if fom_values is not None and len(fom_values) == n
+            else 0
+        )
+        dist, prev = dijkstra(start)
+        farthest = max(dist.keys(), key=lambda k: dist[k])
+        curr = farthest
+        p = []
+        while curr is not None:
+            p.append(curr)
+            curr = prev[curr]
+        path = p
+    else:
+        # Closed loop without force_open
+        start = 0
+        visited = {start}
+        path = [start]
+        curr = start
+        while len(visited) < n:
+            unvisited_nbrs = [v for v, _ in adj[curr] if v not in visited]
+            if unvisited_nbrs:
+                next_node = min(
+                    unvisited_nbrs,
+                    key=lambda v: np.hypot(
+                        pts_x[curr] - pts_x[v], pts_y[curr] - pts_y[v]
+                    ),
+                )
+            else:
+                break
+            visited.add(next_node)
+            path.append(next_node)
+            curr = next_node
         path.append(start)
 
-    return pts_x[path], pts_y[path]
+    path_arr = np.array(path, dtype=int)
+    # Canonical orientation for open curves: sort monotonically along x1
+    if force_open and len(path_arr) > 1 and pts_x[path_arr[0]] > pts_x[path_arr[-1]]:
+        path_arr = path_arr[::-1]
+
+    return pts_x[path_arr], pts_y[path_arr]
 
 
 def compute_curve_normals(
     x1: np.ndarray | list[float],
     x2: np.ndarray | list[float],
+    force_open: bool = False,
+    is_closed: bool | None = None,
 ) -> np.ndarray:
     """Computes 2D unit normal vectors along a planar parameter trajectory.
 
@@ -207,6 +275,8 @@ def compute_curve_normals(
     Args:
         x1: Array or sequence of coordinates for the first parameter.
         x2: Array or sequence of coordinates for the second parameter.
+        force_open: If True, treats the curve as an open curve with endpoints.
+        is_closed: Optional explicit boolean flag specifying whether the curve is periodic.
 
     Returns:
         Array of shape (N, 2) containing normalized 2D normal vectors [n_x1, n_x2].
@@ -219,7 +289,12 @@ def compute_curve_normals(
     if n == 1:
         return np.array([[0.0, 1.0]], dtype=float)
 
-    is_closed = (n >= 4) and (np.hypot(p1[0] - p1[-1], p2[0] - p2[-1]) < 1e-4)
+    if is_closed is None:
+        is_closed = (
+            (not force_open)
+            and (n >= 4)
+            and (np.hypot(p1[0] - p1[-1], p2[0] - p2[-1]) < 1e-4)
+        )
 
     dx1 = np.zeros(n, dtype=float)
     dx2 = np.zeros(n, dtype=float)
@@ -381,11 +456,12 @@ def extract_optimal_loci(
     fom_2d: np.ndarray,
     threshold_percentile: float = 85.0,
     min_locus_area_px: int = 15,
-    max_loci: int = 1,
+    max_loci: int | str | None = 1,
     sample_points: int = 50,
     smoothness: float = 0.001,
     spline_degree: int = 3,
     mode: Literal["auto", "cartesian", "polar"] = "auto",
+    force_open: bool = True,
     p1_name: str = "x1",
     p2_name: str = "x2",
 ) -> list[dict[str, Any]]:
@@ -402,10 +478,12 @@ def extract_optimal_loci(
         threshold_percentile: Cutoff percentile (e.g. 85%) defining high-FOM candidate regions.
         min_locus_area_px: Minimum connected component pixel area to qualify as a valid locus.
         max_loci: Maximum number of distinct connected locus ridges to extract (defaults to 1).
+            Accepts an integer, None, or 'auto' to extract all valid detected components.
         sample_points: Number of points along the sampled smooth output curve.
         smoothness: B-spline smoothing parameter s.
         spline_degree: Degree of B-spline interpolation (default: 3).
         mode: Extraction geometry mode: 'polar' (closed ring), 'cartesian' (open), or 'auto'.
+        force_open: If True (default), forces the extracted locus to remain an open curve rather than a closed loop.
         p1_name: Name of the first parameter.
         p2_name: Name of the second parameter.
 
@@ -442,7 +520,7 @@ def extract_optimal_loci(
     mask = (fom_2d >= cutoff) & np.isfinite(fom_2d)
     mask = ndi.binary_closing(mask)
 
-    if mode == "auto":
+    if mode == "auto" and not force_open:
         filled = ndi.binary_fill_holes(mask)
         # If filling holes adds a significant interior region, it is an annular ring
         if np.sum(filled) > (np.sum(mask) + 15):
@@ -481,7 +559,10 @@ def extract_optimal_loci(
         return []
 
     components.sort(key=lambda c: c[2], reverse=True)
-    selected_components = components[:max_loci]
+    if max_loci is None or (isinstance(max_loci, str) and max_loci.lower() == "auto"):
+        selected_components = components
+    else:
+        selected_components = components[: int(max_loci)]
 
     loci_results = []
     for locus_idx, (_lbl, _area, _max_val, _mean_val, comp_mask) in enumerate(
@@ -495,8 +576,11 @@ def extract_optimal_loci(
 
         raw_x1 = grid_x1[x_idx]
         raw_x2 = grid_x2[y_idx]
+        raw_fom = fom_2d[y_idx, x_idx]
 
-        ord_x1, ord_x2 = order_skeleton_points(raw_x1, raw_x2)
+        ord_x1, ord_x2 = order_skeleton_points(
+            raw_x1, raw_x2, fom_values=raw_fom, force_open=force_open
+        )
 
         # Remove duplicate adjacent points
         dists = np.hypot(np.diff(ord_x1), np.diff(ord_x2))
@@ -511,7 +595,8 @@ def extract_optimal_loci(
             is_closed = False
         else:
             is_closed = (
-                len(ord_x1) >= 6
+                not force_open
+                and len(ord_x1) >= 6
                 and np.hypot(ord_x1[0] - ord_x1[-1], ord_x2[0] - ord_x2[-1]) < 0.03
             )
             k = min(spline_degree, len(ord_x1) - 1, 3)
@@ -794,7 +879,7 @@ def refine_locus_points(
     locus["x1_unrefined"] = list(x1_pts)
     locus["x2_unrefined"] = list(x2_pts)
 
-    normals = compute_curve_normals(x1_pts, x2_pts)
+    normals = compute_curve_normals(x1_pts, x2_pts, is_closed=locus.get("is_closed"))
     p1_n = param_names[0] if len(param_names) >= 1 else "x1"
     p2_n = param_names[1] if len(param_names) >= 2 else "x2"
 

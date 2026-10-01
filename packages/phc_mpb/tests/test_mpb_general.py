@@ -12,6 +12,7 @@ from phc_mpb import (
     create_mode_solver,
     gds_to_mpb_geometry,
     get_epsilon_grid,
+    get_gamma_centered_kpath,
     get_high_symmetry_kpath,
     lattice_to_mpb_lattice,
     plot_band_diagram,
@@ -286,9 +287,9 @@ def test_plot_band_structure_normalize_false_wavelength():
     ax = fig.axes[0]
     assert "Wavelength" in ax.get_ylabel()
     assert r"\mu" in ax.get_ylabel()
-    # Check default lam_min=0.3 and lam_max=0.6 limits
-    assert np.isclose(ax.get_ylim()[0], 0.3)
-    assert np.isclose(ax.get_ylim()[1], 0.6)
+    # Check default lam_min=0.42 and lam_max=0.45 limits
+    assert np.isclose(ax.get_ylim()[0], 0.42)
+    assert np.isclose(ax.get_ylim()[1], 0.45)
 
     lines = [l for l in ax.get_lines() if l.get_linestyle() in ("None", "none", "")]
     assert len(lines) == 2
@@ -590,3 +591,121 @@ def test_run_band_solver_no_parity():
     assert results["te_fractions"].shape == (2, 2)
     assert np.all(results["te_fractions"] >= 0.0)
     assert np.all(results["te_fractions"] <= 1.0)
+
+
+def test_gamma_centered_kpath_hexagonal():
+    """Verify get_gamma_centered_kpath for hexagonal lattice."""
+    import meep as mp
+
+    k_density = 15
+    k_max = 0.1
+    k_pts, labels, indices = get_gamma_centered_kpath(
+        lattice_type="hexagonal",
+        k_max=k_max,
+        k_density=k_density,
+    )
+
+    # 1. Check labels and structure
+    assert labels == [
+        r"$k_{\max}\text{ (M)} \leftarrow$",
+        r"$\Gamma$",
+        r"$\rightarrow k_{\max}\text{ (K)}$",
+    ]
+    assert len(indices) == 3
+    assert indices == [0, k_density + 1, 2 * (k_density + 1)]
+    assert len(k_pts) == 2 * (k_density + 1) + 1
+
+    # 2. Check Gamma is at the center
+    gamma_pt = k_pts[indices[1]]
+    assert gamma_pt.x == 0.0 and gamma_pt.y == 0.0 and gamma_pt.z == 0.0
+
+    # 3. Check Cartesian wavevector magnitudes <= k_max
+    mp_lat = create_lattice(lattice_type="hexagonal", pitch=1.0, dimension="2D")
+    cart_mags = [
+        np.linalg.norm(
+            [
+                mp.reciprocal_to_cartesian(k, mp_lat).x,
+                mp.reciprocal_to_cartesian(k, mp_lat).y,
+            ]
+        )
+        for k in k_pts
+    ]
+    assert max(cart_mags) <= k_max + 1e-6
+    # Outer endpoints must reach k_max
+    assert np.isclose(cart_mags[indices[0]], k_max, atol=1e-5)
+    assert np.isclose(cart_mags[indices[2]], k_max, atol=1e-5)
+
+
+def test_gamma_centered_kpath_square():
+    """Verify get_gamma_centered_kpath for square lattice."""
+    import meep as mp
+
+    k_density = 10
+    k_max = 0.12
+    k_pts, labels, indices = get_gamma_centered_kpath(
+        lattice_type="square",
+        k_max=k_max,
+        k_density=k_density,
+    )
+
+    # 1. Check labels and structure
+    assert labels == [
+        r"$k_{\max}\text{ (X)} \leftarrow$",
+        r"$\Gamma$",
+        r"$\rightarrow k_{\max}\text{ (M)}$",
+    ]
+    assert indices == [0, k_density + 1, 2 * (k_density + 1)]
+    assert len(k_pts) == 2 * (k_density + 1) + 1
+
+    # 2. Check Gamma is at the center
+    gamma_pt = k_pts[indices[1]]
+    assert gamma_pt.x == 0.0 and gamma_pt.y == 0.0
+
+    # 3. Check Cartesian wavevector magnitudes <= k_max
+    mp_lat = create_lattice(lattice_type="square", pitch=1.0, dimension="2D")
+    cart_mags = [
+        np.linalg.norm(
+            [
+                mp.reciprocal_to_cartesian(k, mp_lat).x,
+                mp.reciprocal_to_cartesian(k, mp_lat).y,
+            ]
+        )
+        for k in k_pts
+    ]
+    assert max(cart_mags) <= k_max + 1e-6
+    assert np.isclose(cart_mags[indices[0]], k_max, atol=1e-5)
+    assert np.isclose(cart_mags[indices[2]], k_max, atol=1e-5)
+
+
+def test_gamma_centered_kpath_dispatch_and_errors():
+    """Verify dispatching from get_high_symmetry_kpath and input validation."""
+    # Dispatch with kpath_type='gamma_centered'
+    k_pts1, labels1, indices1 = get_high_symmetry_kpath(
+        lattice_type="hexagonal",
+        kpath_type="gamma_centered",
+        k_max=0.08,
+        k_density=5,
+    )
+    k_pts2, labels2, indices2 = get_gamma_centered_kpath(
+        lattice_type="hexagonal",
+        k_max=0.08,
+        k_density=5,
+    )
+    assert (
+        labels1
+        == labels2
+        == [
+            r"$k_{\max}\text{ (M)} \leftarrow$",
+            r"$\Gamma$",
+            r"$\rightarrow k_{\max}\text{ (K)}$",
+        ]
+    )
+    assert indices1 == indices2
+    assert len(k_pts1) == len(k_pts2)
+
+    # Error handling for invalid k_max
+    with pytest.raises(ValueError, match="k_max must be positive"):
+        get_gamma_centered_kpath(lattice_type="hexagonal", k_max=0.0)
+
+    with pytest.raises(ValueError, match="k_max must be positive"):
+        get_gamma_centered_kpath(lattice_type="hexagonal", k_max=-0.1)

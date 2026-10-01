@@ -47,7 +47,7 @@ def run_pipeline(
     polarization: str = "te",
     output_dir: Path | str | None = None,
     verbose: bool = True,
-    sim_name: str = "c4v_test"
+    sim_name: str = "c4v_test",
 ) -> dict[str, Any]:
     """Runs the end-to-end  simulation pipeline connecting layout, materials, and MPB.
 
@@ -142,7 +142,9 @@ def run_pipeline(
         geometry=geometry,
         k_points=k_points,
         default_material=mat_clad if slab_thickness is not None else mat_slab,
-        resolution=(resolution, resolution, resolution_z) if slab_thickness is not None else resolution,
+        resolution=(resolution, resolution, resolution_z)
+        if slab_thickness is not None
+        else resolution,
         num_bands=num_bands,
     )
     print("Running MPB band solver...")
@@ -185,7 +187,7 @@ def run_pipeline(
     if slab_thickness is None:
         title = f"r₁={r1:.2f}, r₂={r2:.2f}"
     else:
-        title = f"h/a={slab_thickness  / pitch:.2f}, r₁={r1:.2f}, r₂={r2:.2f}"
+        title = f"h/a={slab_thickness / pitch:.2f}, r₁={r1:.2f}, r₂={r2:.2f}"
     fig_band = plot_band_structure(
         results=results,
         node_labels=labels,
@@ -196,7 +198,6 @@ def run_pipeline(
         fig_band, artifact_key="band_plot", filename="band_structure.png"
     )
     plt.close(fig_band)
-
 
     # Save structured results JSON summary
     t_total = time.time() - t_start
@@ -254,9 +255,11 @@ def run_pipeline(
         "summary": summary_data,
     }
 
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from phc_mpb import plot_band_structure
+
     num_bands = 8
     k_density = 5
     slab_thickness = 0.5
@@ -265,17 +268,35 @@ if __name__ == "__main__":
     pol2 = "tm_like" if slab_thickness is not None else "te"
 
     print(f"Running {pol1.upper()}...")
-    res_pol1 = run_pipeline(polarization=pol1, sim_name=f"c4v_{pol1}", num_bands=num_bands,
-        k_density=k_density, slab_thickness=slab_thickness, num_workers=num_workers)
+    res_pol1 = run_pipeline(
+        polarization=pol1,
+        sim_name=f"c4v_{pol1}",
+        num_bands=num_bands,
+        k_density=k_density,
+        slab_thickness=slab_thickness,
+        num_workers=num_workers,
+    )
 
     print(f"Running {pol2.upper()}...")
-    res_pol2 = run_pipeline(polarization=pol2, sim_name=f"c4v_{pol2}", num_bands=num_bands,
-        k_density=k_density, slab_thickness=slab_thickness, num_workers=num_workers)
+    res_pol2 = run_pipeline(
+        polarization=pol2,
+        sim_name=f"c4v_{pol2}",
+        num_bands=num_bands,
+        k_density=k_density,
+        slab_thickness=slab_thickness,
+        num_workers=num_workers,
+    )
 
     print("Running No Parity (All)...")
     # Note: Use "all" as the key so line 162 matches results["freqs"]["all"]
-    res_all = run_pipeline(polarization="all", sim_name="c4v_all", num_bands=num_bands*2,
-        k_density=k_density, slab_thickness=slab_thickness, num_workers=num_workers)
+    res_all = run_pipeline(
+        polarization="all",
+        sim_name="c4v_all",
+        num_bands=num_bands * 2,
+        k_density=k_density,
+        slab_thickness=slab_thickness,
+        num_workers=num_workers,
+    )
 
     # Combine freqs and gaps into a single results dictionary
     combined_results = {
@@ -303,7 +324,6 @@ if __name__ == "__main__":
         colors={"all": "gray", pol1: "tab:blue", pol2: "tab:red"},
         alpha={"all": 0.4, pol1: 0.9, pol2: 0.9},
         plot_gaps=True,
-
     )
 
     # Save to disk or display

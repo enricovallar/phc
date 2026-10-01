@@ -1,7 +1,6 @@
-# %%
-%load_ext autoreload
-%autoreload 2
-# %%
+# %load_ext autoreload
+# %autoreload 2
+
 
 import gdsfactory as gf
 from phc_layout import utils

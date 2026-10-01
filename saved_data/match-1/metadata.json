@@ -1,0 +1,51 @@
+{
+  "name": "match-1",
+  "timestamp": "2026-09-28T16:42:10.910616+00:00",
+  "type": "locus_match_point",
+  "geometry": {
+    "r1": 0.22909591137085408,
+    "r2": 0.06277070536368279,
+    "p": 0.3359602413889234,
+    "p2": 0.25,
+    "pitch_nm": 335.9602413889234,
+    "slab_thickness": 0.25,
+    "thickness_nm": 83.99006034723085,
+    "supercell_thickness": 4.0,
+    "resolution": 16,
+    "resolution_z": 16,
+    "substrate_material": "sio2",
+    "substrate_thickness": 2.0,
+    "matrix_material": "hBN",
+    "cladding_material": "air"
+  },
+  "locus_characterization": {
+    "target_wavelength_nm": 436.0,
+    "target_thickness_nm": 100.0,
+    "residual_thickness_error_nm": null,
+    "omega_d": 0.770551012359916,
+    "v_g_delta_omega": null,
+    "residual_gap": null
+  },
+  "polarization": "all",
+  "bands": [
+    9,
+    10,
+    11
+  ],
+  "frequencies": {
+    "9": 0.37765049671213885,
+    "10": 0.3776510978631987,
+    "11": 0.5454143418084592
+  },
+  "files": {
+    "dispersion_npz": "dispersion.npz",
+    "fields_npz": "fields.npz",
+    "unit_cell_gds": "unit_cell.gds",
+    "locus_01_match_band_structure": "locus_01_match_band_structure.png",
+    "locus_01_match_band_structure_wavelength": "locus_01_match_band_structure_wavelength.png",
+    "locus_01_match_epsilon": "locus_01_match_epsilon.png",
+    "locus_match_band_structure": "locus_match_band_structure.png",
+    "locus_match_band_structure_wavelength": "locus_match_band_structure_wavelength.png",
+    "locus_match_epsilon": "locus_match_epsilon.png"
+  }
+}

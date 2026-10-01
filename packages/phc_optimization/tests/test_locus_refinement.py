@@ -13,7 +13,11 @@ from phc_optimization.locus import (
     find_target_locus_point,
     refine_locus_points,
 )
-from phc_optimization.plotting import plot_locus_dirac_frequency, plot_locus_profile
+from phc_optimization.plotting import (
+    plot_locus_dirac_frequency,
+    plot_locus_profile,
+    plot_locus_wavelength,
+)
 
 
 def test_compute_curve_normals_line():
@@ -82,6 +86,41 @@ def test_extract_polar_ring_locus():
     # Coordinates should lie on circle of radius r_target
     extracted_radii = np.hypot(locus["x1"], locus["x2"])
     np.testing.assert_allclose(extracted_radii, r_target, atol=0.015)
+
+
+def test_extract_optimal_loci_force_open():
+    """Verifies that force_open=True creates an open trajectory on circular ridges."""
+    x1 = np.linspace(-0.5, 0.5, 60)
+    x2 = np.linspace(-0.5, 0.5, 60)
+    X1, X2 = np.meshgrid(x1, x2)
+
+    r_target = 0.28
+    dist = np.hypot(X1, X2)
+    fom_2d = 100.0 * np.exp(-((dist - r_target) ** 2) / 0.002)
+
+    # 1. force_open=True (default) should yield is_closed = False
+    loci_open = extract_optimal_loci(
+        grid_x1=x1,
+        grid_x2=x2,
+        fom_2d=fom_2d,
+        mode="cartesian",
+        force_open=True,
+        sample_points=30,
+    )
+    assert len(loci_open) == 1
+    assert loci_open[0]["is_closed"] is False
+
+    # 2. force_open=False should yield is_closed = True on complete ring
+    loci_closed = extract_optimal_loci(
+        grid_x1=x1,
+        grid_x2=x2,
+        fom_2d=fom_2d,
+        mode="cartesian",
+        force_open=False,
+        sample_points=30,
+    )
+    assert len(loci_closed) == 1
+    assert loci_closed[0]["is_closed"] is True
 
 
 def test_extract_optimal_loci_single_selection():
@@ -315,6 +354,29 @@ def test_bayesian_optimizer_analyze_locus_runs(tmp_path: Path):
         assert (tmp_path / "locus_match_epsilon.png").is_file()
         assert (tmp_path / "locus_match_unit_cell.gds").is_file()
 
+    # Verify that string-based 'auto' and list-based ['all'] work seamlessly
+    res_auto = opt.analyze_locus(
+        refine_loci="auto",
+        sample_points=3,
+        max_refine_steps=1,
+        plot_match_bands=False,
+        plot_profile=False,
+        plot_dirac_freq=False,
+        plot_wavelength=False,
+    )
+    assert isinstance(res_auto, list)
+
+    res_all = opt.analyze_locus(
+        refine_loci=["all"],
+        sample_points=3,
+        max_refine_steps=1,
+        plot_match_bands=False,
+        plot_profile=False,
+        plot_dirac_freq=False,
+        plot_wavelength=False,
+    )
+    assert isinstance(res_all, list)
+
 
 def test_evaluate_locus_dirac_frequencies():
     """Verifies that evaluate_locus_dirac_frequencies computes and populates Dirac frequencies."""
@@ -402,6 +464,58 @@ def test_plot_locus_dirac_frequency(tmp_path: Path):
     errors = [abs(0.5 * w * target_wavelength - target_thickness) for w in omega_d_vals]
     expected_best_idx = int(np.argmin(errors))
     assert opt_info["index"] == expected_best_idx
+
+    # Verify that target frequency is guaranteed to be within y-limits on both panels
+    y1_min, y1_max = axes[0].get_ylim()
+    y2_min, y2_max = axes[1].get_ylim()
+    assert y1_min <= expected_ideal <= y1_max
+    assert y2_min <= expected_ideal <= y2_max
+
+
+def test_plot_locus_wavelength(tmp_path: Path):
+    """Verifies that plot_locus_wavelength generates a 2-panel figure with match and target scaling."""
+    n_pts = 8
+    x1_vals = np.linspace(0.20, 0.30, n_pts)
+    x2_vals = np.linspace(0.15, 0.25, n_pts)
+    omega_d_vals = np.linspace(0.30, 0.40, n_pts)
+
+    locus = {
+        "locus_id": 1,
+        "p1_name": "r1",
+        "p2_name": "r2",
+        "x1": list(x1_vals),
+        "x2": list(x2_vals),
+        "dirac_frequency": list(omega_d_vals),
+    }
+
+    target_wavelength_nm = 436.0
+    target_thickness_nm = 100.0
+    slab_thickness = 0.25
+    pitch = 1.0
+
+    fig_path = tmp_path / "test_wavelength.png"
+    fig = plot_locus_wavelength(
+        locus=locus,
+        param_names=["r1", "r2"],
+        target_wavelength_nm=target_wavelength_nm,
+        target_thickness_nm=target_thickness_nm,
+        slab_thickness=slab_thickness,
+        pitch=pitch,
+        output_path=fig_path,
+        title="Test Dirac Wavelength Plot",
+    )
+
+    assert fig is not None
+    assert fig_path.is_file()
+
+    axes = fig.get_axes()
+    assert len(axes) >= 2
+
+    # Verify target wavelength line is within y-limits of both panels
+    y1_min, y1_max = axes[0].get_ylim()
+    y2_min, y2_max = axes[1].get_ylim()
+    assert y1_min <= target_wavelength_nm <= y1_max
+    assert y2_min <= target_wavelength_nm <= y2_max
 
 
 def test_refine_locus_points_records_frequencies():
@@ -580,3 +694,80 @@ def test_find_latest_locus_path(tmp_path: Path):
     # Test load_loci_from_json with 'latest'
     loaded = load_loci_from_json(path=None, geometry=None)
     assert isinstance(loaded, list)
+
+
+def test_extract_multiple_loci_and_selective_refinement(tmp_path: Path):
+    """Verifies that max_loci extracts multiple loci and refine_loci targets chosen IDs."""
+    from phc_optimization.locus import extract_optimal_loci
+
+    # Create synthetic 2D FOM landscape with 2 distinct ridges
+    x1 = np.linspace(0.1, 0.4, 60)
+    x2 = np.linspace(0.05, 0.2, 60)
+    _X1, X2 = np.meshgrid(x1, x2)
+
+    # Ridge 1: around x2 = 0.08
+    fom1 = 200.0 * np.exp(-((X2 - 0.08) ** 2) / 0.0001)
+    # Ridge 2: around x2 = 0.16 (well separated from ridge 1)
+    fom2 = 180.0 * np.exp(-((X2 - 0.16) ** 2) / 0.0001)
+    fom_2d = fom1 + fom2
+
+    # Test max_loci = 1
+    loci_1 = extract_optimal_loci(
+        grid_x1=x1, grid_x2=x2, fom_2d=fom_2d, threshold_percentile=80.0, max_loci=1
+    )
+    assert len(loci_1) == 1
+    assert loci_1[0]["locus_id"] == 1
+
+    # Test max_loci = 2
+    loci_2 = extract_optimal_loci(
+        grid_x1=x1, grid_x2=x2, fom_2d=fom_2d, threshold_percentile=80.0, max_loci=2
+    )
+    assert len(loci_2) == 2
+    assert loci_2[0]["locus_id"] == 1
+    assert loci_2[1]["locus_id"] == 2
+
+    # Test max_loci = 'auto'
+    loci_auto = extract_optimal_loci(
+        grid_x1=x1,
+        grid_x2=x2,
+        fom_2d=fom_2d,
+        threshold_percentile=80.0,
+        max_loci="auto",
+    )
+    assert len(loci_auto) >= 2
+
+
+def test_plot_locus_degeneracy_bands_pipeline(tmp_path: Path):
+    """Verifies that run_degeneracy_bands_pipeline executes cleanly and produces valid scaling artifacts."""
+    from analysis.plot_locus_degeneracy_bands import (
+        DEFAULT_RUN_DIR,
+        compute_degeneracy_bands,
+        run_degeneracy_bands_pipeline,
+    )
+
+    omega_d = np.array([0.732, 0.745, 0.760, 0.772])
+    bands = compute_degeneracy_bands(
+        omega_d=omega_d,
+        h_over_a=0.25,
+        h_min_nm=70.0,
+        h_max_nm=110.0,
+        h_points=5,
+        target_wavelength_nm=436.0,
+        target_thickness_nm=100.0,
+    )
+    assert len(bands["h_arr"]) == 5
+    assert bands["slope_lam_min"] < bands["slope_lam_max"]
+    assert np.all(bands["lam_min_arr"] < bands["lam_max_arr"])
+
+    # If the default run dir exists, test full end-to-end pipeline in quick mode
+    if DEFAULT_RUN_DIR.is_dir():
+        out_fig = tmp_path / "test_degeneracy_bands.png"
+        res = run_degeneracy_bands_pipeline(
+            run_dir=DEFAULT_RUN_DIR,
+            locus_id=1,
+            output_path=out_fig,
+            quick=True,
+        )
+        assert out_fig.is_file()
+        assert res["summary_json_path"].is_file()
+        assert res["bands"]["w_min"] > 0.7

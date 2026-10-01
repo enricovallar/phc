@@ -90,6 +90,7 @@ def plot_bo_surrogate_map(
     grid_points: int = 150,
     clean_refit: bool = True,
     overlay_locus: bool = True,
+    max_loci: int | str = 1,
     colorbar_limits: tuple[float, float] | None = None,
 ) -> plt.Figure | None:
     """Plots a high-fidelity 2-panel surrogate map for any 2-parameter optimization run.
@@ -111,6 +112,7 @@ def plot_bo_surrogate_map(
         grid_points: Resolution per dimension for surrogate evaluation (default: 150).
         clean_refit: Whether to fit a clean penalty-filtered GP to eliminate boundary cliff artifacts.
         overlay_locus: Whether to extract and overlay the 1D degeneracy ridge curve in green.
+        max_loci: Maximum number of distinct locus curves to extract and overlay (default: 1, accepts 'auto').
         colorbar_limits: Optional manual (vmin, vmax) colorbar bounds.
 
     Returns:
@@ -184,6 +186,7 @@ def plot_bo_surrogate_map(
                 grid_x2=landscape.x2_grid,
                 fom_2d=landscape.predicted_fom,
                 threshold_percentile=85.0,
+                max_loci=max_loci,
             )
         except (ValueError, RuntimeError, TypeError):
             loci = []
@@ -244,22 +247,47 @@ def plot_bo_surrogate_map(
         extend="both",
     )
 
-    # Overlay loci ridges in green
+    # Overlay loci ridges with distinct colors and index badges
+    locus_colors = ["#00FF66", "#FFE600", "#FF0055", "#00F0FF", "#FF7700", "#FFFFFF"]
     if loci:
         for idx, locus in enumerate(loci):
+            l_id = locus.get("locus_id", idx + 1)
+            color = locus_colors[(l_id - 1) % len(locus_colors)]
             lbl_locus = (
-                "Degeneracy Locus" if idx == 0 else f"Locus #{locus['locus_id']}"
+                "Degeneracy Locus" if len(loci) == 1 and l_id == 1 else f"Locus #{l_id}"
             )
             ax2.plot(
                 locus["x1"],
                 locus["x2"],
-                color="#00FF66",
+                color=color,
                 linestyle="--",
                 linewidth=2.0,
-                alpha=0.9,
+                alpha=0.95,
                 label=lbl_locus,
                 zorder=7,
             )
+            x_pts = locus.get("x1", [])
+            y_pts = locus.get("x2", [])
+            if len(x_pts) > 0:
+                mid_idx = len(x_pts) // 2
+                ax2.text(
+                    x_pts[mid_idx],
+                    y_pts[mid_idx],
+                    f"#{l_id}",
+                    color="black",
+                    fontsize=8,
+                    fontweight="bold",
+                    ha="center",
+                    va="center",
+                    bbox={
+                        "boxstyle": "circle,pad=0.2",
+                        "facecolor": color,
+                        "edgecolor": "black",
+                        "alpha": 0.9,
+                        "lw": 0.8,
+                    },
+                    zorder=8,
+                )
 
     ax2.scatter(
         p1_vals,
@@ -738,17 +766,20 @@ def plot_locus_dirac_frequency(
 
     min_w = float(np.min(omega_d))
     max_w = float(np.max(omega_d))
-    span_w = max_w - min_w if max_w > min_w else 0.05
-    if (min_w - 0.5 * span_w) <= ideal_omega_d <= (max_w + 0.5 * span_w):
-        ax1.axhline(
-            ideal_omega_d,
-            color="#D9534F",
-            linestyle="--",
-            linewidth=1.5,
-            alpha=0.85,
-            label=rf"Target $\tilde{{\omega}}_D = {ideal_omega_d:.4f}$",
-            zorder=2,
-        )
+    y_min = min(min_w, ideal_omega_d)
+    y_max = max(max_w, ideal_omega_d)
+    span_y = y_max - y_min if y_max > y_min else 0.05
+    y_pad = 0.15 * max(span_y, 0.01)
+
+    ax1.axhline(
+        ideal_omega_d,
+        color="#D9534F",
+        linestyle="--",
+        linewidth=1.5,
+        alpha=0.85,
+        label=rf"Target $\tilde{{\omega}}_D = {ideal_omega_d:.4f}$",
+        zorder=2,
+    )
 
     # Highlight optimal point
     ax1.scatter(
@@ -770,7 +801,7 @@ def plot_locus_dirac_frequency(
         f"  $a = {opt_a * 1e3:.1f}$ nm, $h = {opt_h * 1e3:.1f}$ nm\n"
         f"  ${p1_name} = {opt_x1:.4f}$, ${p2_name} = {opt_x2:.4f}$"
     )
-    near_top = (opt_omega_d - min_w) / max(span_w, 1e-12) > 0.65
+    near_top = (opt_omega_d - y_min) / max(span_y, 1e-12) > 0.65
     y_off_a = -65 if near_top else 20
     x_off_a = 20 if opt_idx < n_pts // 2 else -140
     xy_text_offset_a = (x_off_a, y_off_a)
@@ -812,7 +843,7 @@ def plot_locus_dirac_frequency(
     )
     ax1.grid(True, linestyle=":", alpha=0.6)
     ax1.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
-    ax1.margins(y=0.18)
+    ax1.set_ylim(y_min - y_pad, y_max + y_pad)
     ax1.legend(
         loc="lower left" if near_top else "upper left",
         frameon=True,
@@ -864,16 +895,15 @@ def plot_locus_dirac_frequency(
         label=r"$\tilde{\omega}_D(i)$",
         zorder=3,
     )
-    if (min_w - 0.5 * span_w) <= ideal_omega_d <= (max_w + 0.5 * span_w):
-        ax2.axhline(
-            ideal_omega_d,
-            color="#D9534F",
-            linestyle="--",
-            linewidth=1.5,
-            alpha=0.85,
-            label=rf"Target $\tilde{{\omega}}_D = {ideal_omega_d:.4f}$",
-            zorder=2,
-        )
+    ax2.axhline(
+        ideal_omega_d,
+        color="#D9534F",
+        linestyle="--",
+        linewidth=1.5,
+        alpha=0.85,
+        label=rf"Target $\tilde{{\omega}}_D = {ideal_omega_d:.4f}$",
+        zorder=2,
+    )
 
     # Highlight optimal point
     ax2.scatter(
@@ -925,7 +955,7 @@ def plot_locus_dirac_frequency(
     )
     ax2.grid(True, linestyle=":", alpha=0.6)
     ax2.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
-    ax2.margins(y=0.18)
+    ax2.set_ylim(y_min - y_pad, y_max + y_pad)
     if n_pts <= 20:
         ax2.set_xticks(sample_indices)
     ax2.legend(
@@ -955,6 +985,322 @@ def plot_locus_dirac_frequency(
     }
     locus["optimal_match"] = best_match_info
     fig._optimal_match = best_match_info  # type: ignore[attr-defined]
+
+    if output_path is not None:
+        p = Path(output_path).resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(p, bbox_inches="tight")
+
+    return fig
+
+
+def plot_locus_wavelength(
+    locus: dict[str, Any],
+    param_names: Sequence[str] | None = None,
+    target_wavelength: float = 1.55,
+    target_thickness: float | None = None,
+    target_frequency: float | None = None,
+    target_wavelength_nm: float | None = None,
+    target_thickness_nm: float | None = None,
+    slab_thickness: float = 0.5,
+    pitch: float = 1.0,
+    output_path: Path | str | None = None,
+    title: str = "Dirac Wavelength along Optimal Degeneracy Locus",
+) -> plt.Figure:
+    """Plots a 2-panel figure evaluating operating Dirac wavelength in nanometers along the degeneracy locus.
+
+    Evaluates the physical operating Dirac wavelength $\\lambda_D$ (in nm) across discrete locus samples under two
+    distinct fabrication/scaling paradigms:
+    - Panel (a) on left: Assumes all samples have the identical physical slab thickness as the closest match point
+      ($h = h_{\\mathrm{match}}$). Given the fixed simulation unit cell thickness ratio $\\eta = h_{\\mathrm{sim}} / a_{\\mathrm{sim}}$,
+      the required lattice pitch is constant across all samples ($a = a_{\\mathrm{match}} = h_{\\mathrm{match}} / \\eta$). The operating
+      Dirac wavelength is $\\lambda_D^{(i)} = a_{\\mathrm{match}} / \\tilde{\\omega}_D^{(i)}$, guaranteeing that $\\lambda_D = \\lambda_{\\mathrm{target}}$
+      identically at the match point.
+    - Panel (b) on right: Assumes all samples have the nominal target slab thickness ($h = h_{\\mathrm{target}}$).
+      The required lattice pitch is constant across all samples ($a = h_{\\mathrm{target}} / \\eta$). The operating
+      Dirac wavelength is $\\lambda_D^{(i)} = \\frac{h_{\\mathrm{target}}}{\\eta \\cdot \\tilde{\\omega}_D^{(i)}}$, which differs
+      from $\\lambda_{\\mathrm{target}}$ only by the discrete thickness discretization error $|h_{\\mathrm{match}} - h_{\\mathrm{target}}|$.
+
+    In both panels, highlights the design point closest to the specified targets with a gold star marker, annotates
+    the physical pitch, slab thickness, and coordinates, and includes an analytical horizontal dashed reference line
+    at the target physical wavelength $\\lambda_{\\mathrm{target}}$ (in nm) with guaranteed y-axis visibility.
+
+    Args:
+        locus: Locus dictionary containing 'x1', 'x2', and 'dirac_frequency' (or 'omega_d').
+        param_names: Optional sequence of geometric parameter names (e.g. ['r1', 'r2']).
+        target_wavelength: Desired operating wavelength $\\lambda_{\\mathrm{target}}$ in micrometers (default: 1.55).
+        target_thickness: Desired slab membrane thickness $h_{\\mathrm{target}}$ in micrometers.
+            If None, defaults to `slab_thickness`.
+        target_frequency: Optional direct normalized Dirac frequency target override $\\tilde{\\omega}_D$.
+        target_wavelength_nm: Desired physical wavelength in nanometers. Overrides `target_wavelength`.
+        target_thickness_nm: Desired physical slab thickness in nanometers. Overrides `target_thickness`.
+        slab_thickness: Slab thickness $h_{\\mathrm{sim}}$ in the simulation (or ratio $h/a$, default: 0.5).
+        pitch: Lattice pitch $a_{\\mathrm{sim}}$ in the simulation (default: 1.0).
+        output_path: Optional file path to save the generated figure.
+        title: Overall plot figure supertitle.
+
+    Returns:
+        Matplotlib Figure object containing the 2-panel wavelength analysis.
+
+    Raises:
+        ValueError: If locus lacks valid coordinate or Dirac frequency arrays.
+    """
+    if target_wavelength_nm is not None:
+        lam_target_nm = float(target_wavelength_nm)
+    else:
+        lam_target_nm = float(target_wavelength) * 1000.0
+
+    if target_thickness_nm is not None:
+        h_target_nm = float(target_thickness_nm)
+    elif target_thickness is not None:
+        h_target_nm = float(target_thickness) * 1000.0
+    else:
+        h_target_nm = float(slab_thickness) * 1000.0
+
+    p1_name = (
+        param_names[0]
+        if param_names and len(param_names) >= 1
+        else locus.get("p1_name", "x1")
+    )
+    p2_name = (
+        param_names[1]
+        if param_names and len(param_names) >= 2
+        else locus.get("p2_name", "x2")
+    )
+
+    x1_vals = np.asarray(locus.get("x1", []), dtype=float)
+    x2_vals = np.asarray(locus.get("x2", []), dtype=float)
+    n_pts = len(x1_vals)
+    if n_pts == 0:
+        raise ValueError("Locus contains no points ('x1' is empty).")
+
+    df_raw = locus.get(
+        "dirac_frequency",
+        locus.get("omega_d", locus.get("freq_middle", [])),
+    )
+    if not df_raw or len(df_raw) == 0:
+        raise ValueError(
+            "Locus does not contain 'dirac_frequency' or 'omega_d'. "
+            "Ensure Dirac frequencies are evaluated before plotting."
+        )
+    omega_d = np.asarray(df_raw, dtype=float)
+    if len(omega_d) != n_pts:
+        raise ValueError(
+            f"Dimension mismatch: 'x1' has {n_pts} points, but 'dirac_frequency' has {len(omega_d)} values."
+        )
+
+    sample_indices = np.arange(1, n_pts + 1)
+    eta = float(slab_thickness) / max(float(pitch), 1e-12)
+
+    # Identify match point
+    opt_match = locus.get("optimal_match")
+    if opt_match and "index" in opt_match and int(opt_match["index"]) < n_pts:
+        opt_idx = int(opt_match["index"])
+    else:
+        if target_frequency is not None:
+            ideal_omega_d = float(target_frequency)
+            errors = np.abs(omega_d - ideal_omega_d)
+        else:
+            h_vals_nm = eta * omega_d * lam_target_nm
+            errors = np.abs(h_vals_nm - h_target_nm)
+        opt_idx = int(np.argmin(errors))
+
+    opt_omega_d = float(omega_d[opt_idx])
+    opt_pt_idx = int(sample_indices[opt_idx])
+    opt_x1 = float(x1_vals[opt_idx])
+    opt_x2 = float(x2_vals[opt_idx])
+
+    # Left: Match point thickness and corresponding pitch
+    a_match_nm = opt_omega_d * lam_target_nm
+    h_match_nm = eta * a_match_nm
+    lam_left_nm = a_match_nm / np.maximum(omega_d, 1e-12)
+
+    # Right: Target thickness and corresponding pitch
+    a_target_nm = h_target_nm / max(eta, 1e-12)
+    lam_right_nm = a_target_nm / np.maximum(omega_d, 1e-12)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.2, 5.2), dpi=150)
+    fig.subplots_adjust(top=0.88, bottom=0.14, wspace=0.28)
+
+    # -------------------------------------------------------------
+    # Panel (a): Fixed h = h_match
+    # -------------------------------------------------------------
+    ax1.plot(
+        sample_indices,
+        lam_left_nm,
+        "-o",
+        color="#005A9E",
+        linewidth=2.0,
+        markersize=5,
+        label=r"$\lambda_D(i)$",
+        zorder=3,
+    )
+    ax1.axhline(
+        lam_target_nm,
+        color="#D9534F",
+        linestyle="--",
+        linewidth=1.5,
+        alpha=0.85,
+        label=rf"Target $\lambda = {lam_target_nm:.1f}\,$nm",
+        zorder=2,
+    )
+    ax1.scatter(
+        opt_pt_idx,
+        lam_left_nm[opt_idx],
+        marker="*",
+        s=260,
+        facecolor="#FFD700",
+        edgecolor="#8B0000",
+        linewidth=1.5,
+        zorder=6,
+        label=f"Closest Match (Pt #{opt_pt_idx})",
+    )
+
+    y_min_1 = min(float(np.min(lam_left_nm)), lam_target_nm)
+    y_max_1 = max(float(np.max(lam_left_nm)), lam_target_nm)
+    span_y_1 = y_max_1 - y_min_1 if y_max_1 > y_min_1 else 10.0
+    y_pad_1 = 0.15 * max(span_y_1, 1.0)
+    ax1.set_ylim(y_min_1 - y_pad_1, y_max_1 + y_pad_1)
+
+    near_top_1 = (lam_left_nm[opt_idx] - y_min_1) / max(span_y_1, 1e-12) > 0.65
+    callout_left = (
+        f"Closest Match (Pt #{opt_pt_idx}):\n"
+        f"  $\\lambda = {lam_left_nm[opt_idx]:.2f}\\,$nm\n"
+        f"  $h = {h_match_nm:.1f}\\,$nm (match)\n"
+        f"  $a = {a_match_nm:.1f}\\,$nm\n"
+        f"  ${p1_name} = {opt_x1:.4f}$, ${p2_name} = {opt_x2:.4f}$"
+    )
+    x_off_1 = -120 if opt_idx > n_pts // 2 else 15
+    y_off_1 = -55 if near_top_1 else 20
+    ax1.annotate(
+        callout_left,
+        xy=(opt_pt_idx, lam_left_nm[opt_idx]),
+        xytext=(x_off_1, y_off_1),
+        textcoords="offset points",
+        fontsize=8.5,
+        bbox={
+            "boxstyle": "round,pad=0.4",
+            "facecolor": "#FFFFE0",
+            "edgecolor": "#B8860B",
+            "alpha": 0.9,
+        },
+        arrowprops={
+            "arrowstyle": "->",
+            "connectionstyle": "arc3,rad=0.2" if not near_top_1 else "arc3,rad=-0.2",
+            "color": "#8B0000",
+            "lw": 1.2,
+        },
+        zorder=7,
+    )
+
+    ax1.set_xlabel("Sample Point Index", fontsize=11, fontweight="bold")
+    ax1.set_ylabel(r"Dirac Wavelength $\lambda_D$ [nm]", fontsize=11, fontweight="bold")
+    ax1.set_title(
+        rf"(a) Fixed $h = h_{{\mathrm{{match}}}} = {h_match_nm:.1f}\,$nm ($a = {a_match_nm:.1f}\,$nm)",
+        fontsize=11.5,
+        fontweight="bold",
+    )
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    ax1.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    if n_pts <= 25:
+        ax1.set_xticks(sample_indices)
+    ax1.legend(
+        loc="lower left" if near_top_1 else "upper left",
+        frameon=True,
+        framealpha=0.85,
+        fontsize=8.5,
+    )
+
+    # -------------------------------------------------------------
+    # Panel (b): Fixed h = h_target
+    # -------------------------------------------------------------
+    ax2.plot(
+        sample_indices,
+        lam_right_nm,
+        "-s",
+        color="#2E7D32",
+        linewidth=1.8,
+        markersize=5,
+        label=r"$\lambda_D(i)$",
+        zorder=3,
+    )
+    ax2.axhline(
+        lam_target_nm,
+        color="#D9534F",
+        linestyle="--",
+        linewidth=1.5,
+        alpha=0.85,
+        label=rf"Target $\lambda = {lam_target_nm:.1f}\,$nm",
+        zorder=2,
+    )
+    ax2.scatter(
+        opt_pt_idx,
+        lam_right_nm[opt_idx],
+        marker="*",
+        s=260,
+        facecolor="#FFD700",
+        edgecolor="#8B0000",
+        linewidth=1.5,
+        zorder=6,
+        label=f"Closest Match (Pt #{opt_pt_idx})",
+    )
+
+    y_min_2 = min(float(np.min(lam_right_nm)), lam_target_nm)
+    y_max_2 = max(float(np.max(lam_right_nm)), lam_target_nm)
+    span_y_2 = y_max_2 - y_min_2 if y_max_2 > y_min_2 else 10.0
+    y_pad_2 = 0.15 * max(span_y_2, 1.0)
+    ax2.set_ylim(y_min_2 - y_pad_2, y_max_2 + y_pad_2)
+
+    near_top_2 = (lam_right_nm[opt_idx] - y_min_2) / max(span_y_2, 1e-12) > 0.65
+    callout_right = (
+        f"Closest Match (Pt #{opt_pt_idx}):\n"
+        f"  $\\lambda = {lam_right_nm[opt_idx]:.2f}\\,$nm\n"
+        f"  $h = {h_target_nm:.1f}\\,$nm (target)\n"
+        f"  $a = {a_target_nm:.1f}\\,$nm\n"
+        f"  ${p1_name} = {opt_x1:.4f}$, ${p2_name} = {opt_x2:.4f}$"
+    )
+    x_off_2 = -120 if opt_idx > n_pts // 2 else 15
+    y_off_2 = -55 if near_top_2 else 20
+    ax2.annotate(
+        callout_right,
+        xy=(opt_pt_idx, lam_right_nm[opt_idx]),
+        xytext=(x_off_2, y_off_2),
+        textcoords="offset points",
+        fontsize=8.5,
+        bbox={
+            "boxstyle": "round,pad=0.4",
+            "facecolor": "#E8F5E9",
+            "edgecolor": "#2E7D32",
+            "alpha": 0.9,
+        },
+        arrowprops={
+            "arrowstyle": "->",
+            "connectionstyle": "arc3,rad=-0.2",
+            "color": "#2E7D32",
+            "lw": 1.2,
+        },
+        zorder=7,
+    )
+
+    ax2.set_xlabel("Sample Point Index", fontsize=11, fontweight="bold")
+    ax2.set_ylabel(r"Dirac Wavelength $\lambda_D$ [nm]", fontsize=11, fontweight="bold")
+    ax2.set_title(
+        rf"(b) Fixed $h = h_{{\mathrm{{target}}}} = {h_target_nm:.1f}\,$nm ($a = {a_target_nm:.1f}\,$nm)",
+        fontsize=11.5,
+        fontweight="bold",
+    )
+    ax2.grid(True, linestyle=":", alpha=0.6)
+    ax2.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    if n_pts <= 25:
+        ax2.set_xticks(sample_indices)
+    ax2.legend(
+        loc="lower left" if near_top_2 else "upper left",
+        frameon=True,
+        framealpha=0.85,
+        fontsize=8.5,
+    )
+
+    fig.suptitle(title, fontsize=12.5, fontweight="bold", y=0.98)
 
     if output_path is not None:
         p = Path(output_path).resolve()

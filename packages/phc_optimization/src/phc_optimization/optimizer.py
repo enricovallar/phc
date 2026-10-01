@@ -8,7 +8,7 @@ import inspect
 import json
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Literal
@@ -27,6 +27,7 @@ from phc_mpb import (
     create_mode_solver,
     gds_to_mpb_geometry,
     get_epsilon_grid,
+    get_gamma_centered_kpath,
     get_high_symmetry_kpath,
     plot_band_structure,
     plot_epsilon,
@@ -57,6 +58,7 @@ from phc_optimization.plotting import (
     plot_bo_surrogate_map,
     plot_locus_dirac_frequency,
     plot_locus_profile,
+    plot_locus_wavelength,
 )
 from phc_optimization.surrogate import predict_surrogate_landscape
 from phc_optimization.types import OptimizationRecord, OptimizationResult, ParameterSpec
@@ -634,7 +636,7 @@ class BayesianOptimizer:
         epsilon_threshold: float = 1.1,
         min_neck_width_px: int = 1,
         max_iterations: int = 15,
-        batch_size: int = 1,
+        batch_size: int | None = None,
         num_workers: int | None = None,
         initial_points: int = 8,
         initial_sampling: str = "sobol",
@@ -643,6 +645,7 @@ class BayesianOptimizer:
         strategy: str = "cl_min",
         random_state: int = 42,
         show_progress: bool = True,
+        find_loci: int | str = 1,
         output_dir: Path | str | None = None,
         geometry_name: str = "unit_cell",
     ):
@@ -668,7 +671,7 @@ class BayesianOptimizer:
             epsilon_threshold: Permittivity threshold for connectivity check.
             min_neck_width_px: Minimum neck feature width in pixels for connectivity check.
             max_iterations: Number of guided optimization generations.
-            batch_size: Candidate points evaluated per generation.
+            batch_size: Candidate points evaluated per generation. Defaults to num_workers if None.
             num_workers: Number of parallel worker processes for candidate evaluation.
                 Defaults to batch_size if None.
             initial_points: Initial exploration points before GP guidance.
@@ -678,6 +681,7 @@ class BayesianOptimizer:
             strategy: Constant liar batch strategy ('cl_min', 'cl_mean', 'cl_max').
             random_state: Random seed for reproducible surrogate sampling.
             show_progress: Whether to display a real-time tqdm progress bar.
+            find_loci: Number of degeneracy loci to detect and overlay on the GP surrogate map (default: 1, accepts 'auto').
             output_dir: Explicit output directory or None to auto-resolve via phc_hydra.
             geometry_name: Name used in standard output hierarchy.
         """
@@ -700,7 +704,13 @@ class BayesianOptimizer:
         self.min_neck_width_px = int(min_neck_width_px)
 
         self.max_iterations = int(max_iterations)
-        self.batch_size = max(1, int(batch_size))
+        if batch_size is not None:
+            self.batch_size = max(1, int(batch_size))
+        elif num_workers is not None:
+            self.batch_size = max(1, int(num_workers))
+        else:
+            self.batch_size = 1
+
         self.num_workers = (
             int(num_workers) if num_workers is not None else self.batch_size
         )
@@ -711,6 +721,7 @@ class BayesianOptimizer:
         self.strategy = strategy
         self.random_state = int(random_state)
         self.show_progress = bool(show_progress)
+        self.find_loci = find_loci
         self.geometry_name = geometry_name
 
         # Parse parameter search space
@@ -1084,7 +1095,13 @@ class BayesianOptimizer:
 
         try:
             while curr_eval < total_evals:
-                batch_sz = min(self.batch_size, total_evals - curr_eval)
+                if curr_eval < self.initial_points:
+                    # In the quasi-random initial exploration phase, evaluate up to num_workers
+                    # independent candidate points simultaneously to maximize core utilization.
+                    batch_sz = min(self.num_workers, self.initial_points - curr_eval)
+                else:
+                    batch_sz = min(self.batch_size, total_evals - curr_eval)
+
                 candidates = self.optimizer.ask(
                     n_points=batch_sz, strategy=self.strategy
                 )
@@ -1200,6 +1217,7 @@ class BayesianOptimizer:
                 records=self.records,
                 param_names=self.param_names,
                 output_path=surr_png,
+                max_loci=self.find_loci,
             )
 
         # Export tabular trajectory CSV
@@ -1292,6 +1310,10 @@ class BayesianOptimizer:
         plot_wavelength: bool = True,
         title_prefix: str = "Optimal",
         ylim_wavelength: tuple[float, float] | None = None,
+        lam_min: float = 0.42,
+        lam_max: float = 0.45,
+        kpath_type: Literal["gamma_centered", "standard"] = "gamma_centered",
+        k_max: float = 0.1,
     ) -> dict[str, Any]:
         """Runs the best parameter set from the optimization history.
 
@@ -1316,6 +1338,10 @@ class BayesianOptimizer:
             plot_wavelength: Whether to render physical wavelength band structure when pitch is set.
             title_prefix: Label prefix for plot figure titles (default: 'Optimal').
             ylim_wavelength: Optional manual y-axis limits (um) for wavelength band plot.
+            lam_min: Minimum wavelength limit in micrometers (um) for wavelength band plot (default: 0.42 um = 420 nm).
+            lam_max: Maximum wavelength limit in micrometers (um) for wavelength band plot (default: 0.45 um = 450 nm).
+            kpath_type: Type of k-path for the band diagram: 'gamma_centered' (default) or 'standard'.
+            k_max: Maximum Cartesian wavevector radius |k|/(2π) when kpath_type='gamma_centered' (default: 0.1).
 
         Returns:
             Dictionary containing:
@@ -1390,10 +1416,17 @@ class BayesianOptimizer:
         )
 
         # 3. Generate high-symmetry k-path for the band diagram
-        k_pts, k_labels, k_indices = get_high_symmetry_kpath(
-            lattice_type=self.lattice_type,
-            k_density=k_density,
-        )
+        if kpath_type == "gamma_centered":
+            k_pts, k_labels, k_indices = get_gamma_centered_kpath(
+                lattice_type=self.lattice_type,
+                k_max=k_max,
+                k_density=k_density,
+            )
+        else:
+            k_pts, k_labels, k_indices = get_high_symmetry_kpath(
+                lattice_type=self.lattice_type,
+                k_density=k_density,
+            )
 
         with silence_c_stdout():
             # 4. Construct MPB ModeSolver initialized along the k-path
@@ -1455,19 +1488,19 @@ class BayesianOptimizer:
                     cladding_index=clad_idx,
                     num_workers=num_workers,
                 )
+                solver_res["k_points"] = [np.array([kp.x, kp.y, kp.z]) for kp in k_pts]
+                solver_res["k_labels"] = k_labels
+                solver_res["k_indices"] = k_indices
 
             bands_path = (
                 target_dir / f"{prefix}_band_structure.png" if save_plots else None
-            )
-            param_str = ", ".join(
-                f"{k}={v:.4f}" if isinstance(v, (int, float)) else f"{k}={v}"
-                for k, v in params.items()
             )
             fig_bands = plot_band_structure(
                 results=solver_res,
                 node_labels=k_labels,
                 node_indices=k_indices,
-                title=f"{title_prefix} Photonic Band Structure ({param_str})",
+                plot_gaps=False,
+                title=f"{title_prefix} Band Structure",
                 save_path=bands_path,
             )
 
@@ -1477,7 +1510,9 @@ class BayesianOptimizer:
                     if save_plots
                     else None
                 )
-                title_wl = f"{title_prefix} Photonic Band Structure ({param_str}, a={eff_pitch * 1000.0:.1f}nm)"
+                title_wl = (
+                    f"{title_prefix} Band Structure ($a = {eff_pitch * 1000.0:.1f}$ nm)"
+                )
                 fig_bands_wl = plot_band_structure(
                     results=solver_res,
                     node_labels=k_labels,
@@ -1485,6 +1520,9 @@ class BayesianOptimizer:
                     normalize=False,
                     pitch=eff_pitch,
                     ylim=ylim_wavelength,
+                    lam_min=lam_min,
+                    lam_max=lam_max,
+                    plot_gaps=False,
                     title=title_wl,
                     save_path=wl_path,
                 )
@@ -1503,8 +1541,11 @@ class BayesianOptimizer:
 
     def analyze_locus(
         self,
-        max_loci: int = 1,
+        max_loci: int | str | None = None,
+        refine_loci: Sequence[int | str] | int | str | None = None,
+        threshold_percentile: float = 85.0,
         mode: Literal["auto", "cartesian", "polar"] = "auto",
+        force_open: bool = True,
         refine: bool = True,
         refine_tolerance: float = 1e-5,
         max_refine_steps: int = 8,
@@ -1521,12 +1562,18 @@ class BayesianOptimizer:
         num_bands_substrate: int | None = None,
         plot_profile: bool = True,
         plot_dirac_freq: bool = True,
+        plot_wavelength: bool = True,
         plot_match_bands: bool = True,
         k_density_match: int = 20,
         save_artifacts: bool = True,
         verbose: bool = True,
         num_workers: int | None = None,
         show_progress: bool | None = None,
+        kpath_type: Literal["gamma_centered", "standard"] = "gamma_centered",
+        k_max: float = 0.1,
+        lam_min: float = 0.42,
+        lam_max: float = 0.45,
+        ylim_wavelength: tuple[float, float] | None = None,
     ) -> list[dict[str, Any]]:
         """Extracts, refines, and characterizes optimal 1D degeneracy manifolds.
 
@@ -1539,8 +1586,12 @@ class BayesianOptimizer:
         and solves/plots full dispersion diagrams for the closest target design match.
 
         Args:
-            max_loci: Maximum number of distinct locus ridges to extract (defaults to 1).
+            max_loci: Maximum number of distinct locus ridges to extract (defaults to self.find_loci).
+            refine_loci: Specific locus ID (e.g. 1), sequence of locus IDs (e.g. [1, 2]), 'all', or 'auto'
+                to refine and characterize all detected loci. Defaults to [1].
+            threshold_percentile: Cutoff percentile (e.g. 85.0 or 80.0) defining high-FOM candidate regions.
             mode: Extraction geometry mode: 'polar' (closed ring), 'cartesian' (open), or 'auto'.
+            force_open: If True (default), forces the extracted locus to remain an open curve rather than a closed loop.
             refine: Whether to execute local secant refinement along curve normal vectors.
             refine_tolerance: Cost threshold (e.g. 1e-5) defining exact degeneracy.
             max_refine_steps: Maximum secant iterations per locus point.
@@ -1557,10 +1608,18 @@ class BayesianOptimizer:
             num_bands_substrate: Number of eigenbands for the substrate solve (default: 2.5 * num_bands).
             plot_profile: If True, renders and saves a 3-panel locus profile plot.
             plot_dirac_freq: If True, renders and saves a 2-panel Dirac frequency analysis plot.
+            plot_wavelength: If True, renders and saves a 2-panel Dirac wavelength analysis plot.
             plot_match_bands: If True, solves and plots full band diagrams (normalized & wavelength) for closest match.
             k_density_match: Interpolation density between k-points for closest match band solve.
             save_artifacts: If True, saves locus_points.csv, locus figures, and optimal_loci.json.
             verbose: Whether to print progress information to stdout.
+            num_workers: Number of parallel worker processes.
+            show_progress: Whether to display a progress bar during secant refinement.
+            kpath_type: Type of k-path for the match band diagram: 'gamma_centered' (default) or 'standard'.
+            k_max: Maximum Cartesian wavevector radius |k|/(2π) when kpath_type='gamma_centered' (default: 0.1).
+            lam_min: Minimum wavelength limit in micrometers (um) for match band diagram (default: 0.42 um = 420 nm).
+            lam_max: Maximum wavelength limit in micrometers (um) for match band diagram (default: 0.45 um = 450 nm).
+            ylim_wavelength: Optional manual y-axis limits (um) for wavelength band plot overriding (lam_min, lam_max).
 
         Returns:
             List of processed locus dictionaries containing refined coordinates,
@@ -1584,6 +1643,34 @@ class BayesianOptimizer:
                 f"Locus manifold analysis requires exactly 2 search parameters, got {len(self.param_names)}: {self.param_names}"
             )
 
+        effective_max_loci = self.find_loci if max_loci is None else max_loci
+        refine_all = (
+            isinstance(refine_loci, str) and refine_loci.lower() in ("all", "auto")
+        ) or (
+            isinstance(refine_loci, (list, tuple, set))
+            and any(str(x).lower() in ("all", "auto") for x in refine_loci)
+        )
+
+        target_locus_ids: set[int] | None
+        if refine_all:
+            target_locus_ids = None
+            if effective_max_loci == 1:
+                effective_max_loci = "auto"
+        elif refine_loci is not None:
+            if isinstance(refine_loci, int):
+                target_locus_ids = {refine_loci}
+            else:
+                target_locus_ids = {int(idx) for idx in refine_loci}
+        else:
+            target_locus_ids = {1}
+
+        if target_locus_ids is not None and not (
+            isinstance(effective_max_loci, str) and effective_max_loci.lower() == "auto"
+        ):
+            req_max = max(target_locus_ids)
+            if int(effective_max_loci) < req_max:
+                effective_max_loci = req_max
+
         # 1. Fit clean surrogate landscape
         p1_n, p2_n = self.param_names[0], self.param_names[1]
         bounds = [p.bounds for p in self.param_specs]
@@ -1603,22 +1690,43 @@ class BayesianOptimizer:
         )
 
         # 2. Extract loci from surrogate FOM
-        loci = extract_optimal_loci(
+        all_loci = extract_optimal_loci(
             grid_x1=landscape.x1_grid,
             grid_x2=landscape.x2_grid,
             fom_2d=landscape.predicted_fom,
-            threshold_percentile=85.0,
-            max_loci=max_loci,
+            threshold_percentile=threshold_percentile,
+            max_loci=effective_max_loci,
             sample_points=sample_points,
             mode=mode,
+            force_open=force_open,
             p1_name=p1_n,
             p2_name=p2_n,
         )
 
-        if not loci:
+        if not all_loci:
             if verbose:
                 print("No valid degeneracy loci found in surrogate landscape.")
             return []
+
+        if target_locus_ids is None:
+            target_locus_ids = {loc["locus_id"] for loc in all_loci}
+
+        loci = [loc for loc in all_loci if loc["locus_id"] in target_locus_ids]
+        if not loci:
+            if verbose:
+                print(
+                    f"None of requested locus IDs {sorted(target_locus_ids)} were found "
+                    f"in surrogate landscape (detected {len(all_loci)} loci)."
+                )
+            return []
+
+        found_ids = {loc["locus_id"] for loc in loci}
+        missing_ids = target_locus_ids - found_ids
+        if missing_ids and verbose:
+            print(
+                f"Warning: Requested locus IDs {sorted(missing_ids)} were not found "
+                f"(detected {len(all_loci)} loci)."
+            )
 
         # Build reusable geometry lattice & material settings
         default_mat = (
@@ -1969,6 +2077,8 @@ class BayesianOptimizer:
                         target_wavelength=target_wavelength,
                         target_thickness=target_thickness,
                         target_frequency=target_frequency,
+                        target_wavelength_nm=target_wavelength_nm,
+                        target_thickness_nm=target_thickness_nm,
                         slab_thickness=h_val,
                         pitch=self.pitch,
                         output_path=fig_df_path,
@@ -1977,6 +2087,26 @@ class BayesianOptimizer:
                     if verbose:
                         print(
                             f"  Saved 2-panel Dirac frequency plot to '{fig_df_path}'"
+                        )
+
+                if plot_wavelength:
+                    fig_wl_path = locus_dir / "locus_wavelength.png"
+                    plot_locus_wavelength(
+                        locus=locus,
+                        param_names=self.param_names,
+                        target_wavelength=target_wavelength,
+                        target_thickness=target_thickness,
+                        target_frequency=target_frequency,
+                        target_wavelength_nm=target_wavelength_nm,
+                        target_thickness_nm=target_thickness_nm,
+                        slab_thickness=h_val,
+                        pitch=self.pitch,
+                        output_path=fig_wl_path,
+                        title=rf"Degeneracy Locus #{l_id} Dirac Wavelength ($\lambda_D$ vs Sample)",
+                    )
+                    if verbose:
+                        print(
+                            f"  Saved 2-panel Dirac wavelength plot to '{fig_wl_path}'"
                         )
 
                 if compare_substrate and self.dimension == "3D_slab":
@@ -1998,27 +2128,29 @@ class BayesianOptimizer:
                         "target_frequency": sub_res.get("target_frequency"),
                     }
 
-                if plot_match_bands:
-                    try:
-                        h_val = float(
+                try:
+                    h_val = float(
+                        self.fixed_params.get(
+                            "slab_thickness",
                             self.fixed_params.get(
-                                "slab_thickness",
-                                self.fixed_params.get(
-                                    "thickness",
-                                    self.fixed_params.get("h", 0.5),
-                                ),
-                            )
+                                "thickness",
+                                self.fixed_params.get("h", 0.5),
+                            ),
                         )
-                        _opt_idx, match_meta = find_target_locus_point(
-                            locus=locus,
-                            target_wavelength=target_wavelength,
-                            target_thickness=target_thickness,
-                            target_frequency=target_frequency,
-                            target_wavelength_nm=target_wavelength_nm,
-                            target_thickness_nm=target_thickness_nm,
-                            slab_thickness=h_val,
-                            pitch=self.pitch,
-                        )
+                    )
+                    _opt_idx, match_meta = find_target_locus_point(
+                        locus=locus,
+                        target_wavelength=target_wavelength,
+                        target_thickness=target_thickness,
+                        target_frequency=target_frequency,
+                        target_wavelength_nm=target_wavelength_nm,
+                        target_thickness_nm=target_thickness_nm,
+                        slab_thickness=h_val,
+                        pitch=self.pitch,
+                    )
+                    locus["target_match"] = match_meta
+
+                    if plot_match_bands:
                         p1_n = locus.get("p1_name", self.param_names[0])
                         p2_n = locus.get("p2_name", self.param_names[1])
                         match_params = {
@@ -2031,8 +2163,11 @@ class BayesianOptimizer:
                                 f"({p1_n}={match_params[p1_n]:.4f}, {p2_n}={match_params[p2_n]:.4f}, "
                                 f"pitch={match_meta['pitch_nm']:.1f}nm, lambda={match_meta['target_wavelength_nm']:.1f}nm)..."
                             )
-                        target_lam_um = float(match_meta["target_wavelength"])
-                        ylim_wl = (target_lam_um * 0.7, target_lam_um * 1.4)
+                        ylim_wl = (
+                            ylim_wavelength
+                            if ylim_wavelength is not None
+                            else (lam_min, lam_max)
+                        )
                         _match_res = self.run_best(
                             plot_eps=True,
                             plot_bands=True,
@@ -2045,7 +2180,11 @@ class BayesianOptimizer:
                             plot_wavelength=True,
                             title_prefix=f"Locus #{l_id} Match",
                             ylim_wavelength=ylim_wl,
+                            lam_min=lam_min,
+                            lam_max=lam_max,
                             k_density=k_density_match,
+                            kpath_type=kpath_type,
+                            k_max=k_max,
                         )
                         match_meta["files"] = {
                             "band_structure": f"locus_{l_id:02d}_match_band_structure.png",
@@ -2053,10 +2192,44 @@ class BayesianOptimizer:
                             "epsilon": f"locus_{l_id:02d}_match_epsilon.png",
                             "unit_cell_gds": f"locus_{l_id:02d}_match_unit_cell.gds",
                         }
+                        if save_artifacts:
+                            s_res = _match_res.get("solver_results", {})
+                            disp_data: dict[str, Any] = {}
+                            freqs = s_res.get("freqs", {})
+                            if isinstance(freqs, dict):
+                                for k, v in freqs.items():
+                                    if v is not None:
+                                        disp_data[f"freqs_{k}"] = np.asarray(v)
+                            elif freqs is not None:
+                                disp_data["freqs"] = np.asarray(freqs)
+                            if s_res.get("k_points") is not None:
+                                disp_data["k_points"] = np.asarray(s_res["k_points"])
+                            if s_res.get("k_labels") is not None:
+                                disp_data["k_labels"] = np.asarray(s_res["k_labels"])
+                            if s_res.get("k_indices") is not None:
+                                disp_data["k_indices"] = np.asarray(s_res["k_indices"])
+                            if s_res.get("light_line") is not None:
+                                disp_data["light_line"] = np.asarray(
+                                    s_res["light_line"]
+                                )
+                            if s_res.get("te_fractions") is not None:
+                                disp_data["te_fractions"] = np.asarray(
+                                    s_res["te_fractions"]
+                                )
+                            disp_data["pitch"] = np.asarray(match_meta["pitch"])
+                            disp_data["pitch_nm"] = np.asarray(match_meta["pitch_nm"])
+                            disp_npz_path = (
+                                locus_dir / f"locus_{l_id:02d}_match_dispersion.npz"
+                            )
+                            np.savez_compressed(disp_npz_path, **disp_data)
+                            match_meta["files"]["dispersion"] = (
+                                f"locus_{l_id:02d}_match_dispersion.npz"
+                            )
+
                         locus["target_match"] = match_meta
 
-                        # Copy canonical locus match artifacts to main output directory if first locus
-                        if save_artifacts and l_id == 1:
+                        # Copy canonical locus match artifacts to main output directory if primary refined locus
+                        if save_artifacts and l_id == min(target_locus_ids):
                             import shutil
 
                             for src_name, dst_name in [
@@ -2069,6 +2242,14 @@ class BayesianOptimizer:
                                     "locus_match_band_structure_wavelength.png",
                                 ),
                                 (
+                                    "locus_dirac_frequency.png",
+                                    "locus_dirac_frequency.png",
+                                ),
+                                (
+                                    "locus_wavelength.png",
+                                    "locus_wavelength.png",
+                                ),
+                                (
                                     f"locus_{l_id:02d}_match_epsilon.png",
                                     "locus_match_epsilon.png",
                                 ),
@@ -2076,16 +2257,20 @@ class BayesianOptimizer:
                                     f"locus_{l_id:02d}_match_unit_cell.gds",
                                     "locus_match_unit_cell.gds",
                                 ),
+                                (
+                                    f"locus_{l_id:02d}_match_dispersion.npz",
+                                    "locus_match_dispersion.npz",
+                                ),
                             ]:
                                 src_f = locus_dir / src_name
                                 dst_f = self.output_dir / dst_name
                                 if src_f.exists():
                                     shutil.copy2(src_f, dst_f)
-                    except (ValueError, RuntimeError, KeyError) as e:
-                        if verbose:
-                            print(
-                                f"  Warning: Could not compute locus match band structure: {e}"
-                            )
+                except (ValueError, RuntimeError, KeyError) as e:
+                    if verbose:
+                        print(
+                            f"  Warning: Could not compute locus match band structure: {e}"
+                        )
 
         if save_artifacts and loci:
             export_loci_to_json(loci, self.output_dir / "optimal_loci.json")

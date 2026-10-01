@@ -266,3 +266,75 @@ def test_resolve_multiplet_symmetries() -> None:
 
     assert resolved[3]["band"] == 11
     assert resolved[3]["irrep"] == "A_2"
+
+
+def test_resolve_multiplet_symmetries_target_guided() -> None:
+    """Verifies that target_irreps guides accidental triplet disambiguation when single-band raw projections are mixed."""
+    from phc_mpb.symmetry import resolve_multiplet_symmetries
+
+    # Scenario: Accidental triplet in asymmetric substrate slab (Eval #176 like)
+    # Band 15 & 16: E_1 doublet modes
+    # Band 17: Physically A_2, but eigensolver mixing gave E_2 (0.407) > A_2 (0.319) in single-band raw projection
+    records = [
+        {
+            "band": 15,
+            "freq": 0.768901,
+            "irrep": "E_1",
+            "confidence": 0.7518,
+            "characters": {"C6": 0.0, "C3": 0.0, "C2": -0.999, "sv": 0.0, "sd": 0.0},
+            "projections": {
+                "A_1": 0.0,
+                "A_2": 0.2970,
+                "B_1": 0.3611,
+                "B_2": 0.0,
+                "E_1": 0.7518,
+                "E_2": 0.0,
+            },
+        },
+        {
+            "band": 16,
+            "freq": 0.768944,
+            "irrep": "E_1",
+            "confidence": 0.6205,
+            "characters": {"C6": 0.0, "C3": 0.0, "C2": -0.999, "sv": 0.0, "sd": 0.0},
+            "projections": {
+                "A_1": 0.2314,
+                "A_2": 0.0,
+                "B_1": 0.0,
+                "B_2": 0.0801,
+                "E_1": 0.6205,
+                "E_2": 0.1155,
+            },
+        },
+        {
+            "band": 17,
+            "freq": 0.769108,
+            "irrep": "E_2",
+            "confidence": 0.4066,
+            "characters": {"C6": 0.0, "C3": 0.0, "C2": 0.998, "sv": 0.0, "sd": 0.0},
+            "projections": {
+                "A_1": 0.0,
+                "A_2": 0.3186,
+                "B_1": 0.0109,
+                "B_2": 0.0279,
+                "E_1": 0.3285,
+                "E_2": 0.4066,
+            },
+        },
+    ]
+
+    # Without target_irreps: raw unguided partition might pick E_2 for Band 17
+    # With target_irreps: correctly guided to A_2 singlet + E_1 doublet
+    resolved = resolve_multiplet_symmetries(
+        records,
+        symmetry_group="C6v",
+        degeneracy_tol=0.015,
+        target_irreps=["A_2", "E_1", "E_1"],
+    )
+
+    resolved_irreps = [r["irrep"] for r in resolved]
+    assert sorted(resolved_irreps) == ["A_2", "E_1", "E_1"]
+    assert resolved[2]["band"] == 17
+    assert resolved[2]["irrep"] == "A_2"
+    assert resolved[0]["irrep"] == "E_1"
+    assert resolved[1]["irrep"] == "E_1"

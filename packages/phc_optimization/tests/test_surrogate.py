@@ -112,6 +112,20 @@ def test_order_skeleton_points():
     assert np.all(dists > 0.0)
 
 
+def test_order_skeleton_points_prunes_spurs():
+    """Verifies that side spurs are pruned and do not cause U-turns / doubling back."""
+    # Main backbone: (0,0) - (1,0) - (2,0) - (3,0) - (4,0)
+    # Side spur attached at (2,0): (2,1)
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 2.0])
+    y = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+    ord_x, ord_y = order_skeleton_points(x, y, force_open=True)
+    # Should trace the 5-point backbone without visiting (2,1) and U-turning
+    assert len(ord_x) == 5
+    assert np.all(np.diff(ord_x) > 0.0)
+    assert np.all(ord_y == 0.0)
+
+
 def test_extract_optimal_loci():
     """Verifies extraction of a 1D degeneracy locus ridge from a 2D FOM landscape."""
     x1 = np.linspace(0.2, 0.4, 50)

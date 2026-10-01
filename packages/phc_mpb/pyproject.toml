@@ -9,6 +9,7 @@ dependencies = [
     "phc-layout",
     "phc-utils",
     "numpy>=1.24.0",
+    "scipy>=1.10.0",
     "gdstk>=0.9.0",
     "matplotlib>=3.8.0",
 ]

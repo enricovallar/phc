@@ -7,11 +7,15 @@ This module provides tools for physical characterization of electromagnetic eige
 - Unified single-pass modal metrics extraction from ModeSolver eigenfields.
 """
 
+import itertools
+from collections import Counter
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Literal
 
 import numpy as np
+from scipy.ndimage import map_coordinates
+from scipy.optimize import linear_sum_assignment
 
 
 class ModeClassification(StrEnum):
@@ -444,6 +448,34 @@ def _compute_z_mask(
     return z_mask
 
 
+def extract_midplane_field(field_arr: np.ndarray | None) -> np.ndarray | None:
+    """Extracts the 2D mid-plane (z = 0) spatial slice from a 3D/4D eigenmode field array.
+
+    The symmetry of photonic crystal slab modes (e.g. C6v A2 vortex and E1 dipoles)
+    is fully encoded in the 2D mid-plane slice at z = 0. Extracting this 2D slice
+    ensures field dimension compatibility (shape: (Nx, Ny, 3)) across simulations
+    with different slab thicknesses h/a or vertical discretization resolutions.
+
+    Args:
+        field_arr: Complex or real eigenmode field array of shape (Nx, Ny, Nz, 3),
+            or 2D slice array of shape (Nx, Ny, 3), or None.
+
+    Returns:
+        2D mid-plane field array of shape (Nx, Ny, 3), or None if field_arr is None.
+    """
+    if field_arr is None:
+        return None
+    if field_arr.ndim == 4:
+        nz = field_arr.shape[2]
+        return field_arr[:, :, nz // 2, :]
+    if field_arr.ndim == 3 and field_arr.shape[-1] == 3:
+        return field_arr
+    if field_arr.ndim == 3:
+        nz = field_arr.shape[2]
+        return field_arr[:, :, nz // 2]
+    return field_arr
+
+
 def extract_eigenmode_fields(
     ms: Any,
     band: int,
@@ -452,6 +484,7 @@ def extract_eigenmode_fields(
     ] = "electric_displacement",
     slab_thickness: float | None = None,
     z_center: float = 0.0,
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Retrieves and optionally masks eigenfield arrays for a specific band.
 
@@ -461,11 +494,37 @@ def extract_eigenmode_fields(
         field: Type of fields to retrieve ('electric_displacement', 'electric',
             'displacement', or 'magnetic').
         slab_thickness: Optional normalized slab thickness in units of lattice constant a.
+            Used when overlap_mode='slab'.
         z_center: Vertical center coordinate of slab core (default: 0.0).
+        overlap_mode: Spatial domain extraction formulation:
+            - 'midplane' (default): 2D mid-plane slice at z = z_center (shape: (Nx, Ny, 3)),
+              invariant to slab thickness h/a and vertical grid resolution differences.
+            - 'slab': 3D masked slab core |z - z_center| <= slab_thickness / 2.
+            - 'full': Full 3D supercell without vertical cropping.
 
     Returns:
         Tuple of (primary_field, secondary_field_or_None).
+
+    Raises:
+        ValueError: If overlap_mode is unrecognized or field type is invalid.
+        RuntimeError: If field arrays cannot be retrieved from ModeSolver.
     """
+    if overlap_mode not in ("midplane", "slab", "full"):
+        raise ValueError(
+            f"Unknown overlap_mode '{overlap_mode}'. Supported modes: 'midplane', 'slab', 'full'."
+        )
+
+    if isinstance(ms, dict):
+        val = ms[band]
+        if isinstance(val, tuple):
+            e_or_h, d = val
+        else:
+            e_or_h, d = val, None
+        if overlap_mode == "midplane":
+            e_or_h = extract_midplane_field(e_or_h)
+            d = extract_midplane_field(d) if d is not None else None
+        return e_or_h, d
+
     sz = _get_supercell_z(ms)
 
     if field == "electric_displacement":
@@ -476,7 +535,15 @@ def extract_eigenmode_fields(
             raise RuntimeError(
                 f"Failed to retrieve E/D fields for band {band}."
             ) from exc
-        if slab_thickness is not None and e.ndim >= 3 and e.shape[2] > 1:
+        if overlap_mode == "midplane":
+            e = extract_midplane_field(e)
+            d = extract_midplane_field(d)
+        elif (
+            overlap_mode == "slab"
+            and slab_thickness is not None
+            and e.ndim >= 3
+            and e.shape[2] > 1
+        ):
             z_mask = _compute_z_mask(
                 nz=e.shape[2],
                 supercell_z=sz,
@@ -493,7 +560,14 @@ def extract_eigenmode_fields(
             e = ms.get_efield(band)
         except (AttributeError, RuntimeError, TypeError) as exc:
             raise RuntimeError(f"Failed to retrieve E-field for band {band}.") from exc
-        if slab_thickness is not None and e.ndim >= 3 and e.shape[2] > 1:
+        if overlap_mode == "midplane":
+            e = extract_midplane_field(e)
+        elif (
+            overlap_mode == "slab"
+            and slab_thickness is not None
+            and e.ndim >= 3
+            and e.shape[2] > 1
+        ):
             z_mask = _compute_z_mask(
                 nz=e.shape[2],
                 supercell_z=sz,
@@ -509,7 +583,14 @@ def extract_eigenmode_fields(
             d = ms.get_dfield(band)
         except (AttributeError, RuntimeError, TypeError) as exc:
             raise RuntimeError(f"Failed to retrieve D-field for band {band}.") from exc
-        if slab_thickness is not None and d.ndim >= 3 and d.shape[2] > 1:
+        if overlap_mode == "midplane":
+            d = extract_midplane_field(d)
+        elif (
+            overlap_mode == "slab"
+            and slab_thickness is not None
+            and d.ndim >= 3
+            and d.shape[2] > 1
+        ):
             z_mask = _compute_z_mask(
                 nz=d.shape[2],
                 supercell_z=sz,
@@ -525,7 +606,14 @@ def extract_eigenmode_fields(
             h = ms.get_hfield(band)
         except (AttributeError, RuntimeError, TypeError) as exc:
             raise RuntimeError(f"Failed to retrieve H-field for band {band}.") from exc
-        if slab_thickness is not None and h.ndim >= 3 and h.shape[2] > 1:
+        if overlap_mode == "midplane":
+            h = extract_midplane_field(h)
+        elif (
+            overlap_mode == "slab"
+            and slab_thickness is not None
+            and h.ndim >= 3
+            and h.shape[2] > 1
+        ):
             z_mask = _compute_z_mask(
                 nz=h.shape[2],
                 supercell_z=sz,
@@ -544,6 +632,112 @@ def extract_eigenmode_fields(
 _extract_mode_fields = extract_eigenmode_fields
 
 
+def interpolate_field_to_grid(
+    field: np.ndarray,
+    target_shape: tuple[int, ...],
+) -> np.ndarray:
+    """Interpolates a 2D or 3D scalar or complex vector field to match a target spatial mesh grid.
+
+    Maps periodic in-plane dimensions across unit cell boundaries using periodic boundary
+    padding, and resamples vertical slab/supercell coordinates to the target grid dimensions.
+    Enables cross-simulation modal overlaps and mode tracking between different numerical mesh
+    resolutions or vertical slice counts.
+
+    Args:
+        field: Input field numpy array of shape (Nx, Ny, 3) or (Nx, Ny, Nz, 3) for vector fields,
+            or (Nx, Ny) / (Nx, Ny, Nz) for scalar fields. May be float or complex.
+        target_shape: Desired output array shape tuple (e.g. (Nx_tar, Ny_tar, 3) or (Nx_tar, Ny_tar, Nz_tar, 3)).
+
+    Returns:
+        Interpolated numpy array of exact shape `target_shape` with identical dtype to `field`.
+
+    Raises:
+        ValueError: If `field` and `target_shape` have incompatible spatial rank dimensions.
+    """
+    if field.shape == target_shape:
+        return field
+
+    if field.ndim == 4 and len(target_shape) == 3:
+        field = extract_midplane_field(field)
+        if field.shape == target_shape:
+            return field
+
+    if field.ndim != len(target_shape):
+        raise ValueError(
+            f"Cannot interpolate field of shape {field.shape} to incompatible target shape {target_shape}"
+        )
+
+    is_vector = field.ndim >= 2 and field.shape[-1] == 3 and target_shape[-1] == 3
+    spatial_src = field.shape[:-1] if is_vector else field.shape
+    spatial_tar = target_shape[:-1] if is_vector else target_shape
+    ndim = len(spatial_src)
+
+    # Pad periodic dimensions (axes 0 and 1) to handle periodic boundary conditions
+    pad_width = [(0, 1) if d < 2 else (0, 0) for d in range(ndim)]
+    if is_vector:
+        pad_width.append((0, 0))
+
+    if np.iscomplexobj(field):
+        field_pad = np.pad(field.real, pad_width, mode="wrap") + 1j * np.pad(
+            field.imag, pad_width, mode="wrap"
+        )
+    else:
+        field_pad = np.pad(field, pad_width, mode="wrap")
+
+    coords_1d = []
+    for d in range(ndim):
+        Ns = spatial_src[d]
+        Nt = spatial_tar[d]
+        if d < 2:
+            # In-plane periodic: [0, 1) mapped to continuous source indices [0, Ns)
+            u = np.linspace(0.0, 1.0, Nt, endpoint=False)
+            coords_1d.append(u * Ns)
+        else:
+            # Vertical dimension: [0, 1] mapped across slab/supercell
+            if Nt <= 1:
+                coords_1d.append(np.full(Nt, (Ns - 1) / 2.0))
+            elif Ns <= 1:
+                coords_1d.append(np.zeros(Nt))
+            else:
+                u = np.linspace(0.0, 1.0, Nt, endpoint=True)
+                coords_1d.append(u * (Ns - 1))
+
+    grids = np.meshgrid(*coords_1d, indexing="ij")
+    coords = np.array([g.ravel() for g in grids])
+
+    out = np.zeros(target_shape, dtype=field.dtype)
+    if is_vector:
+        for c in range(3):
+            fc = field_pad[..., c]
+            if np.iscomplexobj(fc):
+                r = map_coordinates(fc.real, coords, order=1, mode="nearest").reshape(
+                    spatial_tar
+                )
+                im = map_coordinates(fc.imag, coords, order=1, mode="nearest").reshape(
+                    spatial_tar
+                )
+                out[..., c] = r + 1j * im
+            else:
+                out[..., c] = map_coordinates(
+                    fc, coords, order=1, mode="nearest"
+                ).reshape(spatial_tar)
+    else:
+        if np.iscomplexobj(field_pad):
+            r = map_coordinates(
+                field_pad.real, coords, order=1, mode="nearest"
+            ).reshape(spatial_tar)
+            im = map_coordinates(
+                field_pad.imag, coords, order=1, mode="nearest"
+            ).reshape(spatial_tar)
+            out = r + 1j * im
+        else:
+            out = map_coordinates(field_pad, coords, order=1, mode="nearest").reshape(
+                spatial_tar
+            )
+
+    return out
+
+
 def compute_mode_overlap(
     ms1: Any,
     band1: int,
@@ -554,6 +748,8 @@ def compute_mode_overlap(
     ] = "electric_displacement",
     slab_thickness: float | None = None,
     z_center: float = 0.0,
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
+    interpolate: bool = True,
 ) -> float:
     """Computes the normalized spatial overlap integral between two electromagnetic eigenmodes.
 
@@ -578,22 +774,36 @@ def compute_mode_overlap(
         field: Field formulation to evaluate ('electric_displacement', 'electric',
             'displacement', or 'magnetic'). Default is 'electric_displacement'.
         slab_thickness: Optional normalized slab thickness in units of lattice constant a.
-            When provided, restricts integration along z strictly to |z - z_center| <= slab_thickness / 2.
+            When provided and overlap_mode='slab', restricts integration along z strictly
+            to |z - z_center| <= slab_thickness / 2.
         z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
+        overlap_mode: Spatial domain extraction formulation:
+            - 'midplane' (default): 2D mid-plane slice at z = z_center (shape: (Nx, Ny, 3)),
+              invariant to slab thickness h/a and vertical grid resolution differences.
+            - 'slab': 3D masked slab core |z - z_center| <= slab_thickness / 2.
+            - 'full': Full 3D supercell without vertical cropping.
+        interpolate: If True (default), resamples mode 1 fields onto mode 2 spatial grid
+            when mesh resolutions differ. If False, raises ValueError on dimension mismatch.
 
     Returns:
         Normalized overlap scalar in the range [0.0, 1.0].
 
     Raises:
-        ValueError: If band indices are out of range or field grid dimensions mismatch.
+        ValueError: If band indices are out of range, overlap_mode is invalid, or field grid dimensions mismatch.
         RuntimeError: If fields cannot be retrieved from either solver.
     """
+    if overlap_mode not in ("midplane", "slab", "full"):
+        raise ValueError(
+            f"Unknown overlap_mode '{overlap_mode}'. Supported modes: 'midplane', 'slab', 'full'."
+        )
+
     f1_a, f1_b = _extract_mode_fields(
         ms1,
         band1,
         field=field,
         slab_thickness=slab_thickness,
         z_center=z_center,
+        overlap_mode=overlap_mode,
     )
     f2_a, f2_b = _extract_mode_fields(
         ms2,
@@ -601,13 +811,25 @@ def compute_mode_overlap(
         field=field,
         slab_thickness=slab_thickness,
         z_center=z_center,
+        overlap_mode=overlap_mode,
     )
 
+    if overlap_mode == "midplane":
+        f1_a = extract_midplane_field(f1_a)
+        f1_b = extract_midplane_field(f1_b)
+        f2_a = extract_midplane_field(f2_a)
+        f2_b = extract_midplane_field(f2_b)
+
     if f1_a.shape != f2_a.shape:
-        raise ValueError(
-            f"Field grid dimension mismatch: mode1 {f1_a.shape} vs mode2 {f2_a.shape}. "
-            "Both simulations must use identical mesh resolution."
-        )
+        if interpolate:
+            f1_a = interpolate_field_to_grid(f1_a, f2_a.shape)
+            if f1_b is not None:
+                f1_b = interpolate_field_to_grid(f1_b, f2_a.shape)
+        else:
+            raise ValueError(
+                f"Field grid dimension mismatch: mode1 {f1_a.shape} vs mode2 {f2_a.shape}. "
+                f"Both simulations must use identical mesh resolution (overlap_mode='{overlap_mode}')."
+            )
 
     if field == "electric_displacement":
         assert f1_b is not None and f2_b is not None
@@ -643,6 +865,8 @@ def compute_mode_overlap_matrix(
     ] = "electric_displacement",
     slab_thickness: float | None = None,
     z_center: float = 0.0,
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
+    interpolate: bool = True,
 ) -> np.ndarray:
     """Computes the 2D overlap matrix between sequences of eigenbands from two solvers.
 
@@ -650,19 +874,35 @@ def compute_mode_overlap_matrix(
     achieving O(M + N) field extraction overhead instead of O(M * N).
 
     Args:
-        ms_ref: Reference mpb.ModeSolver instance.
-        ms_target: Target / perturbed mpb.ModeSolver instance.
+        ms_ref: Reference mpb.ModeSolver instance or pre-extracted field dict.
+        ms_target: Target / perturbed mpb.ModeSolver instance or pre-extracted field dict.
         bands_ref: Sequence of 1-based reference band indices (default: all bands in ms_ref).
         bands_target: Sequence of 1-based target band indices (default: all bands in ms_target).
         field: Field formulation to evaluate ('electric_displacement', 'electric',
             'displacement', or 'magnetic'). Default is 'electric_displacement'.
         slab_thickness: Optional normalized slab thickness in units of lattice constant a.
-            When provided, restricts integration along z strictly to |z - z_center| <= slab_thickness / 2.
+            When provided and overlap_mode='slab', restricts integration along z strictly
+            to |z - z_center| <= slab_thickness / 2.
         z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
+        overlap_mode: Spatial domain extraction formulation:
+            - 'midplane' (default): 2D mid-plane slice at z = z_center (shape: (Nx, Ny, 3)),
+              invariant to slab thickness h/a and vertical grid resolution differences.
+            - 'slab': 3D masked slab core |z - z_center| <= slab_thickness / 2.
+            - 'full': Full 3D supercell without vertical cropping.
+        interpolate: If True (default), resamples reference fields onto target grid when
+            mesh resolutions differ. If False, raises ValueError on dimension mismatch.
 
     Returns:
         2D numpy array of shape (len(bands_ref), len(bands_target)) with values in [0.0, 1.0].
+
+    Raises:
+        ValueError: If overlap_mode is invalid or field dimensions mismatch.
     """
+    if overlap_mode not in ("midplane", "slab", "full"):
+        raise ValueError(
+            f"Unknown overlap_mode '{overlap_mode}'. Supported modes: 'midplane', 'slab', 'full'."
+        )
+
     # 1. Pre-extract reference fields
     if isinstance(ms_ref, dict):
         b_ref = list(bands_ref) if bands_ref is not None else list(ms_ref.keys())
@@ -681,6 +921,7 @@ def compute_mode_overlap_matrix(
                 field=field,
                 slab_thickness=slab_thickness,
                 z_center=z_center,
+                overlap_mode=overlap_mode,
             )
             for b in b_ref
         ]
@@ -705,16 +946,41 @@ def compute_mode_overlap_matrix(
                 field=field,
                 slab_thickness=slab_thickness,
                 z_center=z_center,
+                overlap_mode=overlap_mode,
             )
             for b in b_tar
         ]
 
-    # Check shape consistency
-    if ref_fields and tar_fields and ref_fields[0][0].shape != tar_fields[0][0].shape:
-        raise ValueError(
-            f"Field grid dimension mismatch: ref {ref_fields[0][0].shape} vs target {tar_fields[0][0].shape}. "
-            "Both simulations must use identical mesh resolution."
-        )
+    if overlap_mode == "midplane":
+        ref_fields = [
+            (extract_midplane_field(fa), extract_midplane_field(fb))
+            for fa, fb in ref_fields
+        ]
+        tar_fields = [
+            (extract_midplane_field(fa), extract_midplane_field(fb))
+            for fa, fb in tar_fields
+        ]
+
+    # Check shape consistency and interpolate if enabled
+    if ref_fields and tar_fields:
+        ref_shape = ref_fields[0][0].shape
+        tar_shape = tar_fields[0][0].shape
+        if ref_shape != tar_shape:
+            if interpolate:
+                ref_fields = [
+                    (
+                        interpolate_field_to_grid(fa, tar_shape),
+                        interpolate_field_to_grid(fb, tar_shape)
+                        if fb is not None
+                        else None,
+                    )
+                    for fa, fb in ref_fields
+                ]
+            else:
+                raise ValueError(
+                    f"Field grid dimension mismatch: ref {ref_shape} vs target {tar_shape}. "
+                    f"Both simulations must use identical mesh resolution (overlap_mode='{overlap_mode}')."
+                )
 
     matrix = np.zeros((len(b_ref), len(b_tar)), dtype=float)
 
@@ -781,9 +1047,16 @@ def track_modes_by_overlap(
     ] = "electric_displacement",
     slab_thickness: float | None = None,
     z_center: float = 0.0,
+    overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
+    interpolate: bool = True,
     pitch: float | None = None,
     ref_frequencies: dict[int, float] | Sequence[float] | None = None,
     target_frequencies: dict[int, float] | Sequence[float] | None = None,
+    tracking_strategy: Literal["cluster", "bipartite", "greedy"] = "cluster",
+    band_irreps: dict[int, str] | None = None,
+    target_irreps: Sequence[str] | None = None,
+    enforce_irreps: bool = False,
+    **strategy_kwargs: Any,
 ) -> dict[str, Any]:
     """Tracks reference eigenmodes in a perturbed / target ModeSolver using overlap integrals.
 
@@ -804,12 +1077,23 @@ def track_modes_by_overlap(
         field: Field formulation to evaluate ('electric_displacement', 'electric',
             'displacement', or 'magnetic'). Default is 'electric_displacement'.
         slab_thickness: Optional normalized slab thickness in units of lattice constant a.
-            When provided, restricts integration along z strictly to |z - z_center| <= slab_thickness / 2.
+            When provided and overlap_mode='slab', restricts integration along z strictly
+            to |z - z_center| <= slab_thickness / 2.
         z_center: Vertical center coordinate of the slab core in units of lattice constant a (default: 0.0).
+        overlap_mode: Spatial domain extraction formulation:
+            - 'midplane' (default): 2D mid-plane slice at z = z_center (shape: (Nx, Ny, 3)),
+              invariant to slab thickness h/a and vertical grid resolution differences.
+            - 'slab': 3D masked slab core |z - z_center| <= slab_thickness / 2.
+            - 'full': Full 3D supercell without vertical cropping.
+        interpolate: If True (default), resamples reference fields onto target grid when
+            mesh resolutions differ. If False, raises ValueError on dimension mismatch.
         pitch: Optional lattice pitch constant a in micrometers (um). When provided, calculates
             free-space wavelengths lambda_0 = pitch / omega and shifts in nanometers (nm).
         ref_frequencies: Optional dictionary or sequence of reference frequencies (omega_tilde).
         target_frequencies: Optional dictionary or sequence of target frequencies (omega_tilde).
+        tracking_strategy: Target mode selection strategy: 'cluster' (multiplet cohesion, default),
+            'bipartite' (1-to-1 matching via Hungarian algorithm), or 'greedy' (baseline subspace projection).
+        **strategy_kwargs: Additional keyword arguments forwarded to the selected tracking strategy.
 
     Returns:
         Structured dictionary containing:
@@ -828,7 +1112,11 @@ def track_modes_by_overlap(
             - 'delta_wavelength_nm': float | None
         - 'subspace_projection': 1D np.ndarray of length len(target_bands) giving the total
             overlap of each target mode with the subspace spanned by ref_bands.
-        - 'ranked_target_bands': List of target band indices sorted by descending subspace overlap.
+        - 'ranked_target_bands': List of target band indices with tracked multiplet bands placed first.
+        - 'tracked_bands': List of the top k_modes selected target bands.
+        - 'tracking_strategy': The name of the tracking strategy applied.
+        - 'overlap_mode': The overlap spatial formulation used ('midplane', 'slab', or 'full').
+        - 'interpolate': Whether field interpolation was enabled.
     """
     n_tar_total = getattr(ms_target, "num_bands", 1)
     if isinstance(ms_target, dict):
@@ -851,6 +1139,8 @@ def track_modes_by_overlap(
         field=field,
         slab_thickness=slab_thickness,
         z_center=z_center,
+        overlap_mode=overlap_mode,
+        interpolate=interpolate,
     )
 
     # Extract frequencies
@@ -916,8 +1206,19 @@ def track_modes_by_overlap(
 
     # Subspace projection: sum of overlaps across all reference bands in the manifold
     subspace_proj = np.sum(overlap_mat, axis=0)  # shape (len(target_bands),)
-    ranked_indices = np.argsort(subspace_proj)[::-1]
-    ranked_target_bands = [b_tar[idx] for idx in ranked_indices]
+
+    tracked_bands, ranked_target_bands = select_tracked_modes(
+        strategy=tracking_strategy,
+        overlap_mat=overlap_mat,
+        target_bands=b_tar,
+        k_modes=len(b_ref),
+        target_frequencies=[freq_tar_fn(b) for b in b_tar],
+        ref_frequencies=[freq_ref_fn(b) for b in b_ref],
+        band_irreps=band_irreps,
+        target_irreps=target_irreps,
+        enforce_irreps=enforce_irreps,
+        **strategy_kwargs,
+    )
 
     return {
         "overlap_matrix": overlap_mat,
@@ -926,4 +1227,329 @@ def track_modes_by_overlap(
         "best_matches": best_matches,
         "subspace_projection": subspace_proj,
         "ranked_target_bands": ranked_target_bands,
+        "tracked_bands": tracked_bands,
+        "tracking_strategy": tracking_strategy,
+        "overlap_mode": overlap_mode,
     }
+
+
+def select_tracked_modes_greedy(
+    overlap_mat: np.ndarray,
+    target_bands: Sequence[int],
+    k_modes: int,
+) -> tuple[list[int], list[int]]:
+    """Selects top target modes via greedy subspace projection ranking.
+
+    Args:
+        overlap_mat: 2D overlap array of shape (len(ref_bands), len(target_bands)).
+        target_bands: Sequence of target band indices.
+        k_modes: Number of tracked modes to select.
+
+    Returns:
+        Tuple of (tracked_bands, ranked_target_bands).
+    """
+    subspace_proj = np.sum(overlap_mat, axis=0)
+    ranked_indices = np.argsort(subspace_proj)[::-1]
+    ranked_target_bands = [target_bands[idx] for idx in ranked_indices]
+    tracked_bands = ranked_target_bands[:k_modes]
+    return tracked_bands, ranked_target_bands
+
+
+def resolve_target_irrep_counts(
+    target_irreps: Sequence[str] | None, k_modes: int
+) -> Counter[str]:
+    """Resolves target irrep requirements into a multiset Counter, expanding 2D representations if needed.
+
+    Args:
+        target_irreps: Sequence of desired irrep labels (e.g. ['A_2', 'E_1', 'E_1'] or ['A_2', 'E_1']).
+        k_modes: Number of modes forming the target multiplet.
+
+    Returns:
+        Counter mapping irrep name to expected count in the candidate cluster.
+    """
+    if not target_irreps:
+        return Counter()
+    counts: Counter[str] = Counter(target_irreps)
+    total = sum(counts.values())
+    if total < k_modes:
+        for irrep in list(counts.keys()):
+            if irrep.upper().startswith("E") and counts[irrep] == 1:
+                counts[irrep] += 1
+                total += 1
+                if total >= k_modes:
+                    break
+    return counts
+
+
+def select_tracked_modes_cluster(
+    overlap_mat: np.ndarray,
+    target_bands: Sequence[int],
+    k_modes: int,
+    target_frequencies: Sequence[float] | dict[int, float] | np.ndarray | None = None,
+    ref_frequencies: Sequence[float] | dict[int, float] | np.ndarray | None = None,
+    max_band_gap: int = 2,
+    spread_penalty_weight: float = 50.0,
+    max_frequency_spread: float | None = 0.025,
+    span_penalty_weight: float = 0.05,
+    band_irreps: dict[int, str] | None = None,
+    target_irreps: Sequence[str] | None = None,
+    enforce_irreps: bool = False,
+    irrep_penalty_weight: float = 1e5,
+) -> tuple[list[int], list[int]]:
+    """Selects target modes by maximizing cluster modal overlap while penalizing frequency dispersion.
+
+    Enforces multiplet cohesion to prevent non-contiguous mode-tracking jumps between distant
+    higher-order bands when tracking degenerate manifolds (such as accidental Dirac cone triplets at Γ),
+    while preserving the ability to skip intervening alien bands of different symmetries.
+
+    Args:
+        overlap_mat: 2D overlap array of shape (len(ref_bands), len(target_bands)).
+        target_bands: Sequence of 1-based target band indices.
+        k_modes: Number of modes forming the target multiplet.
+        target_frequencies: Sequence or mapping of eigenfrequencies for each target band.
+        ref_frequencies: Optional sequence or mapping of reference eigenfrequencies.
+        max_band_gap: Maximum band index gap between adjacent members of a candidate cluster
+            (default: 2, allowing intervening alien bands to be skipped).
+        spread_penalty_weight: Multiplier penalizing relative frequency spread across the cluster.
+        max_frequency_spread: Maximum relative frequency spread (Δω/ω_mid) allowed before severe penalty (default: 0.025 = 2.5%).
+        span_penalty_weight: Multiplier penalizing total band index span.
+        band_irreps: Optional mapping of 1-based band index to point-group irreducible representation label.
+        target_irreps: Optional target irreps forming the multiplet (e.g. ['A_2', 'E_1', 'E_1']).
+        enforce_irreps: If True, penalizes candidate clusters that do not match target irreps.
+        irrep_penalty_weight: Penalty subtracted from candidate cluster score on irrep mismatch.
+
+    Returns:
+        Tuple of (tracked_bands, ranked_target_bands) where tracked_bands has length k_modes.
+    """
+    n_tar = len(target_bands)
+    if n_tar <= k_modes:
+        t_bands = list(target_bands)
+        return t_bands, t_bands
+
+    subspace_proj = np.sum(overlap_mat, axis=0)
+    greedy_order = [target_bands[i] for i in np.argsort(subspace_proj)[::-1]]
+
+    # If frequencies are missing or all zero, fall back to greedy
+    if target_frequencies is None:
+        return select_tracked_modes_greedy(overlap_mat, target_bands, k_modes)
+
+    if isinstance(target_frequencies, dict):
+        freq_arr = np.array(
+            [float(target_frequencies.get(b, 0.0)) for b in target_bands]
+        )
+    else:
+        freq_arr = np.array([float(f) for f in target_frequencies])
+
+    if np.all(freq_arr <= 0.0):
+        return select_tracked_modes_greedy(overlap_mat, target_bands, k_modes)
+
+    candidate_clusters: list[tuple[tuple[int, ...], float]] = []
+
+    for start_i in range(n_tar):
+        max_end = min(n_tar, start_i + k_modes + max_band_gap)
+        window_indices = list(range(start_i, max_end))
+        if len(window_indices) < k_modes:
+            continue
+        for combo_indices in itertools.combinations(window_indices, k_modes):
+            if combo_indices[0] != start_i:
+                continue
+            combo_bands = tuple(target_bands[idx] for idx in combo_indices)
+            f_vals = freq_arr[list(combo_indices)]
+            f_mid = float(np.mean(f_vals))
+            dispersion = (
+                float((np.max(f_vals) - np.min(f_vals)) / f_mid) if f_mid > 0 else 0.0
+            )
+
+            # Subspace coverage: every ref mode finds a representative in the cluster
+            sub_ov = overlap_mat[:, list(combo_indices)]
+            coverage_score = float(np.sum(np.max(sub_ov, axis=1)))
+            total_overlap = float(np.sum(sub_ov))
+            idx_span = combo_indices[-1] - combo_indices[0] + 1 - k_modes
+
+            if max_frequency_spread is not None and dispersion > max_frequency_spread:
+                score = -1e6 - 1000.0 * dispersion
+            else:
+                score = (
+                    coverage_score
+                    + 0.1 * total_overlap
+                    - spread_penalty_weight * dispersion
+                    - 200.0 * (dispersion**2)
+                    - span_penalty_weight * idx_span
+                )
+
+            # Irrep constraint evaluation
+            if band_irreps is not None and (
+                enforce_irreps or target_irreps is not None
+            ):
+                target_counts = resolve_target_irrep_counts(target_irreps, k_modes)
+                combo_irreps = [band_irreps.get(b, "Unknown") for b in combo_bands]
+                cluster_counts = Counter(combo_irreps)
+
+                if target_counts:
+                    # Penalize any alien irrep (not in target_counts or Unknown)
+                    alien_count = sum(
+                        count
+                        for irr, count in cluster_counts.items()
+                        if irr not in target_counts or irr == "Unknown"
+                    )
+                    if alien_count > 0:
+                        score -= irrep_penalty_weight * alien_count
+
+                    # Penalize multiset mismatch with target
+                    if cluster_counts != target_counts:
+                        score -= irrep_penalty_weight
+                elif enforce_irreps:
+                    if any(irr == "Unknown" for irr in combo_irreps):
+                        score -= irrep_penalty_weight
+
+            candidate_clusters.append((combo_bands, score))
+
+    if not candidate_clusters:
+        return greedy_order[:k_modes], greedy_order
+
+    candidate_clusters.sort(key=lambda x: x[1], reverse=True)
+    best_cluster = sorted(candidate_clusters[0][0])
+    ranked_target_bands = best_cluster + [
+        b for b in greedy_order if b not in best_cluster
+    ]
+    return best_cluster, ranked_target_bands
+
+
+def select_tracked_modes_bipartite(
+    overlap_mat: np.ndarray,
+    target_bands: Sequence[int],
+    k_modes: int,
+    target_frequencies: Sequence[float] | dict[int, float] | np.ndarray | None = None,
+    ref_frequencies: Sequence[float] | dict[int, float] | np.ndarray | None = None,
+    cluster_window: int | None = 6,
+    spread_penalty_weight: float = 10.0,
+) -> tuple[list[int], list[int]]:
+    """Selects target modes via maximum-weight bipartite matching (Hungarian algorithm).
+
+    Guarantees a strict 1-to-1 matching between reference modes and target modes, evaluated
+    within coherent local frequency windows to prevent unphysical mode-jumping.
+
+    Args:
+        overlap_mat: 2D overlap array of shape (len(ref_bands), len(target_bands)).
+        target_bands: Sequence of 1-based target band indices.
+        k_modes: Number of modes forming the target multiplet.
+        target_frequencies: Sequence or mapping of eigenfrequencies for each target band.
+        ref_frequencies: Optional sequence or mapping of reference eigenfrequencies.
+        cluster_window: Optional sliding window size restricting candidate span.
+        spread_penalty_weight: Multiplier penalizing relative frequency spread across matched modes.
+
+    Returns:
+        Tuple of (tracked_bands, ranked_target_bands).
+    """
+    n_tar = len(target_bands)
+    if n_tar <= k_modes:
+        t_bands = list(target_bands)
+        return t_bands, t_bands
+
+    subspace_proj = np.sum(overlap_mat, axis=0)
+    greedy_order = [target_bands[i] for i in np.argsort(subspace_proj)[::-1]]
+
+    if target_frequencies is not None:
+        if isinstance(target_frequencies, dict):
+            freq_arr = np.array(
+                [float(target_frequencies.get(b, 0.0)) for b in target_bands]
+            )
+        else:
+            freq_arr = np.array([float(f) for f in target_frequencies])
+    else:
+        freq_arr = np.zeros(n_tar)
+
+    win_size = cluster_window if cluster_window is not None else n_tar
+    win_size = max(k_modes, min(n_tar, win_size))
+
+    best_match: list[int] | None = None
+    best_score = -1e9
+
+    for start_i in range(n_tar - k_modes + 1):
+        end_i = min(n_tar, start_i + win_size)
+        win_indices = list(range(start_i, end_i))
+        if len(win_indices) < k_modes:
+            continue
+
+        sub_ov = overlap_mat[:, win_indices]
+        row_ind, col_ind = linear_sum_assignment(-sub_ov)
+        matched_target_indices = [win_indices[c] for c in col_ind]
+        matched_bands = [target_bands[i] for i in matched_target_indices]
+
+        ov_sum = float(np.sum(overlap_mat[row_ind, matched_target_indices]))
+        if np.any(freq_arr > 0.0):
+            f_vals = freq_arr[matched_target_indices]
+            f_mid = float(np.mean(f_vals))
+            disp = (
+                float((np.max(f_vals) - np.min(f_vals)) / f_mid) if f_mid > 0 else 0.0
+            )
+        else:
+            disp = 0.0
+
+        score = ov_sum - spread_penalty_weight * disp
+        if score > best_score:
+            best_score = score
+            best_match = matched_bands
+
+    best_cluster = sorted(best_match) if best_match else greedy_order[:k_modes]
+    ranked_target_bands = best_cluster + [
+        b for b in greedy_order if b not in best_cluster
+    ]
+    return best_cluster, ranked_target_bands
+
+
+def select_tracked_modes(
+    strategy: Literal["cluster", "bipartite", "greedy"],
+    overlap_mat: np.ndarray,
+    target_bands: Sequence[int],
+    k_modes: int,
+    target_frequencies: Sequence[float] | dict[int, float] | np.ndarray | None = None,
+    ref_frequencies: Sequence[float] | dict[int, float] | np.ndarray | None = None,
+    **strategy_kwargs: Any,
+) -> tuple[list[int], list[int]]:
+    """Modular selector dispatching target mode identification across available algorithms.
+
+    Args:
+        strategy: Algorithm name ('cluster', 'bipartite', or 'greedy').
+        overlap_mat: 2D overlap array of shape (len(ref_bands), len(target_bands)).
+        target_bands: Sequence of 1-based target band indices.
+        k_modes: Number of target modes to track.
+        target_frequencies: Optional target eigenfrequencies.
+        ref_frequencies: Optional reference eigenfrequencies.
+        **strategy_kwargs: Strategy-specific parameters (e.g. max_band_gap, spread_penalty_weight).
+
+    Returns:
+        Tuple of (tracked_bands, ranked_target_bands).
+
+    Raises:
+        ValueError: If strategy is not recognized.
+    """
+    strat = strategy.lower()
+    if strat == "cluster":
+        return select_tracked_modes_cluster(
+            overlap_mat=overlap_mat,
+            target_bands=target_bands,
+            k_modes=k_modes,
+            target_frequencies=target_frequencies,
+            ref_frequencies=ref_frequencies,
+            **strategy_kwargs,
+        )
+    elif strat == "bipartite":
+        return select_tracked_modes_bipartite(
+            overlap_mat=overlap_mat,
+            target_bands=target_bands,
+            k_modes=k_modes,
+            target_frequencies=target_frequencies,
+            ref_frequencies=ref_frequencies,
+            **strategy_kwargs,
+        )
+    elif strat == "greedy":
+        return select_tracked_modes_greedy(
+            overlap_mat=overlap_mat,
+            target_bands=target_bands,
+            k_modes=k_modes,
+        )
+    else:
+        raise ValueError(
+            f"Unknown tracking strategy '{strategy}'. Supported strategies: 'cluster', 'bipartite', 'greedy'."
+        )

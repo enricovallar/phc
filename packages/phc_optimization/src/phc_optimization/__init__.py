@@ -34,6 +34,7 @@ from phc_optimization.plotting import (
     plot_bo_surrogate_map,
     plot_locus_dirac_frequency,
     plot_locus_profile,
+    plot_locus_wavelength,
 )
 from phc_optimization.surrogate import (
     SurrogateLandscape,
@@ -78,6 +79,7 @@ __all__ = [
     "plot_bo_surrogate_map",
     "plot_locus_dirac_frequency",
     "plot_locus_profile",
+    "plot_locus_wavelength",
     "predict_surrogate_landscape",
     "refine_locus_points",
     "run_substrate_band_comparison",

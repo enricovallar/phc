@@ -4,6 +4,7 @@ import gdsfactory as gf
 import numpy as np
 from phc_optimization.objectives import (
     DiracDegeneracyObjective,
+    ModalOverlapDegeneracyObjective,
     get_objective,
 )
 
@@ -146,3 +147,178 @@ def test_modal_overlap_degeneracy_evaluation() -> None:
     assert abs(eval_res.metadata["signed_gap"]) < 1e-6
     # Overlap should be ~1.0
     assert eval_res.metadata["mean_overlap"] > 0.99
+
+
+def test_modal_overlap_degeneracy_tracking_strategy() -> None:
+    """Verifies that ModalOverlapDegeneracyObjective with cluster strategy prevents distant mode jumping."""
+    nx, ny, nz = 4, 4, 4
+    # 2 reference modes
+    ref_fields = {
+        1: (
+            np.ones((nx, ny, nz, 3), dtype=complex),
+            np.ones((nx, ny, nz, 3), dtype=complex),
+        ),
+        2: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * 1j,
+            np.ones((nx, ny, nz, 3), dtype=complex) * 1j,
+        ),
+    }
+
+    # Target fields for 4 modes:
+    # Mode 1: matches ref 1
+    # Mode 2: matches ref 2 slightly (0.3)
+    # Mode 3: distant frequency mode matching ref 2 strongly (0.9)
+    # Mode 4: empty
+    f1 = np.ones((nx, ny, nz, 3), dtype=complex)
+    f2 = np.ones((nx, ny, nz, 3), dtype=complex) * 0.3j
+    f3 = np.ones((nx, ny, nz, 3), dtype=complex) * 0.9j
+
+    t_fields = {
+        1: (f1, f1),
+        2: (f2, f2),
+        3: (f3, f3),
+        4: (np.zeros((nx, ny, nz, 3)), np.zeros((nx, ny, nz, 3))),
+    }
+
+    class MockMS:
+        def __init__(self) -> None:
+            self.num_bands = 4
+            self.all_freqs = [[0.500, 0.502, 0.800, 0.900]]
+
+        def get_efield(self, band: int) -> np.ndarray:
+            return t_fields.get(band, (np.zeros((nx, ny, nz, 3)), None))[0]
+
+        def get_dfield(self, band: int) -> np.ndarray:
+            return t_fields.get(band, (None, np.zeros((nx, ny, nz, 3))))[1]
+
+    ms_mock = MockMS()
+    solver_results = {"freqs": {"te": [[0.500, 0.502, 0.800, 0.900]]}}
+    comp = gf.Component()
+
+    # 1. Cluster strategy: avoids jumping to mode 3 at 0.800, selects cohesive cluster [1, 2]
+    obj_cluster = ModalOverlapDegeneracyObjective(
+        ref_fields=ref_fields,
+        ref_frequencies={1: 0.500, 2: 0.502},
+        ref_bands=[1, 2],
+        tracking_strategy="cluster",
+    )
+    res_cluster = obj_cluster.evaluate(comp, ms_mock, solver_results, params={})
+    assert res_cluster.metadata["target_bands"] == [1, 2]
+    assert abs(res_cluster.metadata["raw_cost"] - 0.002) < 1e-6
+
+    # 2. Greedy strategy: jumps to mode 3 (higher overlap) despite large frequency disparity
+    obj_greedy = ModalOverlapDegeneracyObjective(
+        ref_fields=ref_fields,
+        ref_frequencies={1: 0.500, 2: 0.502},
+        ref_bands=[1, 2],
+        tracking_strategy="greedy",
+    )
+    res_greedy = obj_greedy.evaluate(comp, ms_mock, solver_results, params={})
+    assert 3 in res_greedy.metadata["target_bands"]
+
+
+def test_modal_overlap_degeneracy_enforce_irreps() -> None:
+    """Verifies that ModalOverlapDegeneracyObjective correctly penalizes alien irreps and filters valid multiplets."""
+    nx, ny, nz = 4, 4, 4
+    ref_fields = {
+        1: (
+            np.ones((nx, ny, nz, 3), dtype=complex),
+            np.ones((nx, ny, nz, 3), dtype=complex),
+        ),
+        2: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * 1j,
+            np.ones((nx, ny, nz, 3), dtype=complex) * 1j,
+        ),
+        3: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * -1,
+            np.ones((nx, ny, nz, 3), dtype=complex) * -1,
+        ),
+    }
+
+    # Target fields:
+    # Bands 1, 2, 3: A_2 + E_1 + E_1 target triplet (overlap ~ 0.7)
+    # Bands 4, 5, 6: E_2 + B_1 accidental crossing (overlap ~ 0.95, tiny splitting)
+    f_target = {
+        1: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.7,
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.7,
+        ),
+        2: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.7j,
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.7j,
+        ),
+        3: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * -0.7,
+            np.ones((nx, ny, nz, 3), dtype=complex) * -0.7,
+        ),
+        4: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.95,
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.95,
+        ),
+        5: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.95j,
+            np.ones((nx, ny, nz, 3), dtype=complex) * 0.95j,
+        ),
+        6: (
+            np.ones((nx, ny, nz, 3), dtype=complex) * -0.95,
+            np.ones((nx, ny, nz, 3), dtype=complex) * -0.95,
+        ),
+    }
+
+    class MockMS:
+        def __init__(self) -> None:
+            self.num_bands = 6
+            self.all_freqs = [[0.740, 0.750, 0.751, 0.8100, 0.8101, 0.8102]]
+
+        def get_efield(self, band: int) -> np.ndarray:
+            return f_target.get(band, (np.zeros((nx, ny, nz, 3)), None))[0]
+
+        def get_dfield(self, band: int) -> np.ndarray:
+            return f_target.get(band, (None, np.zeros((nx, ny, nz, 3))))[1]
+
+    ms_mock = MockMS()
+    solver_results = {
+        "freqs": {"te": [[0.740, 0.750, 0.751, 0.8100, 0.8101, 0.8102]]},
+        "symmetries": {
+            "te": [
+                {"band": 1, "irrep": "A_2", "confidence": 0.95},
+                {"band": 2, "irrep": "E_1", "confidence": 0.95},
+                {"band": 3, "irrep": "E_1", "confidence": 0.95},
+                {"band": 4, "irrep": "E_2", "confidence": 0.95},
+                {"band": 5, "irrep": "B_1", "confidence": 0.95},
+                {"band": 6, "irrep": "E_1", "confidence": 0.95},
+            ]
+        },
+    }
+    comp = gf.Component()
+
+    # 1. With enforce_irreps=True: Must select the genuine A_2 + E_1 + E_1 cluster [1, 2, 3]
+    obj_enforced = ModalOverlapDegeneracyObjective(
+        ref_fields=ref_fields,
+        ref_frequencies={1: 0.750, 2: 0.750, 3: 0.750},
+        ref_bands=[1, 2, 3],
+        target_irreps=["A_2", "E_1", "E_1"],
+        enforce_irreps=True,
+        tracking_strategy="cluster",
+    )
+    res_enforced = obj_enforced.evaluate(comp, ms_mock, solver_results, params={})
+    assert res_enforced.metadata["target_bands"] == [1, 2, 3]
+    assert res_enforced.metadata["irrep_match"] is True
+    assert res_enforced.metadata["tracked_irreps"] == ["A_2", "E_1", "E_1"]
+    assert res_enforced.is_penalty is False
+
+    # 2. If target_irreps is mismatched, it must be penalized
+    obj_mismatched = ModalOverlapDegeneracyObjective(
+        ref_fields=ref_fields,
+        ref_frequencies={1: 0.750, 2: 0.750, 3: 0.750},
+        ref_bands=[1, 2, 3],
+        target_irreps=["B_2", "B_2", "B_2"],
+        enforce_irreps=True,
+        tracking_strategy="cluster",
+        irrep_penalty_weight=50.0,
+    )
+    res_mismatched = obj_mismatched.evaluate(comp, ms_mock, solver_results, params={})
+    assert res_mismatched.metadata["irrep_match"] is False
+    assert res_mismatched.is_penalty is True
+    assert res_mismatched.cost >= 50.0
+    assert res_mismatched.fom <= 0.02

@@ -7,7 +7,7 @@ against asymmetric substrate-clad slabs at optimal locus design points.
 import math
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import gdsfactory as gf
 from phc_materials import get_material
@@ -15,6 +15,7 @@ from phc_mpb import (
     create_lattice,
     create_mode_solver,
     gds_to_mpb_geometry,
+    get_gamma_centered_kpath,
     get_high_symmetry_kpath,
     run_band_solver,
 )
@@ -62,6 +63,8 @@ def run_substrate_band_comparison(
     target_frequency: float | None = None,
     output_dir: Path | str | None = None,
     verbose: bool = True,
+    kpath_type: Literal["standard", "gamma_centered"] = "standard",
+    k_max: float = 0.1,
 ) -> dict[str, Any]:
     """Runs a comparative band structure analysis between an air-clad membrane and a SiO₂ substrate-clad slab.
 
@@ -91,6 +94,8 @@ def run_substrate_band_comparison(
         target_frequency: Optional normalized Dirac frequency to mark as a reference line.
         output_dir: Optional directory where the comparison figure will be saved.
         verbose: Whether to print progress information to stdout.
+        kpath_type: Type of k-path for the comparison: 'standard' (default) or 'gamma_centered'.
+        k_max: Maximum Cartesian wavevector radius |k|/(2π) when kpath_type='gamma_centered' (default: 0.1).
 
     Returns:
         Dictionary containing:
@@ -134,10 +139,17 @@ def run_substrate_band_comparison(
     )
 
     # 2. High-symmetry k-path
-    k_pts, k_labels, k_indices = get_high_symmetry_kpath(
-        lattice_type=lattice_type,
-        k_density=k_density,
-    )
+    if kpath_type == "gamma_centered":
+        k_pts, k_labels, k_indices = get_gamma_centered_kpath(
+            lattice_type=lattice_type,
+            k_max=k_max,
+            k_density=k_density,
+        )
+    else:
+        k_pts, k_labels, k_indices = get_high_symmetry_kpath(
+            lattice_type=lattice_type,
+            k_density=k_density,
+        )
 
     # 3. Simulate Symmetric Air-Clad Membrane (TE-like modes)
     if verbose:

@@ -56,12 +56,19 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
         ] = "electric_displacement",
         slab_thickness: float | None = None,
         z_center: float = 0.0,
+        overlap_mode: Literal["midplane", "slab", "full"] = "midplane",
+        interpolate: bool = True,
         pitch: float | None = None,
         min_overlap_threshold: float = 0.4,
         overlap_penalty_weight: float = 0.0,
         target_cost: float = 0.0025,
         symmetry_group: str = "C6v",
         bypass_irrep_identification: bool = True,
+        tracking_strategy: Literal["cluster", "bipartite", "greedy"] = "cluster",
+        tracking_kwargs: dict[str, Any] | None = None,
+        target_irreps: Sequence[str] | None = None,
+        enforce_irreps: bool = False,
+        irrep_penalty_weight: float = 100.0,
     ):
         """Initializes the ModalOverlapDegeneracyObjective.
 
@@ -77,12 +84,25 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
                 'displacement', or 'magnetic'). Default is 'electric_displacement'.
             slab_thickness: Optional normalized slab thickness in units of lattice constant a.
             z_center: Vertical center coordinate of the slab core (default: 0.0).
+            overlap_mode: Spatial domain extraction formulation:
+                - 'midplane' (default): 2D mid-plane slice at z = z_center (shape: (Nx, Ny, 3)),
+                  invariant to slab thickness h/a and vertical grid resolution differences.
+                - 'slab': 3D masked slab core |z - z_center| <= slab_thickness / 2.
+                - 'full': Full 3D supercell without vertical cropping.
+            interpolate: If True (default), resamples reference fields onto target grid when
+                mesh resolutions differ.
             pitch: Optional lattice constant a in micrometers (um).
             min_overlap_threshold: Minimum average subspace projection required before penalizing.
             overlap_penalty_weight: Multiplier for overlap penalty when below threshold.
             target_cost: Target cost floor below which optimization stops penalizing noise.
             symmetry_group: Point group symmetry tag ('C6v' or 'C4v').
-            bypass_irrep_identification: Always True for overlap tracking.
+            bypass_irrep_identification: If False or if enforce_irreps is True, enables symmetry computation.
+            tracking_strategy: Target mode selection strategy ('cluster', 'bipartite', or 'greedy').
+                Default is 'cluster' (multiplet cohesion).
+            tracking_kwargs: Optional dictionary of keyword arguments passed to the mode tracker.
+            target_irreps: Optional target irrep labels forming the target multiplet (e.g. ['A_2', 'E_1', 'E_1']).
+            enforce_irreps: If True, filters and penalizes tracked modes that do not match target irreps.
+            irrep_penalty_weight: Multiplier penalizing frequency cost when tracked modes fail irrep matching.
 
         Raises:
             ValueError: If neither ref_ms nor ref_fields is provided, or ref_bands is empty.
@@ -95,6 +115,8 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
         self.field = field
         self.slab_thickness = slab_thickness
         self.z_center = float(z_center)
+        self.overlap_mode = overlap_mode
+        self.interpolate = interpolate
         self.pitch = float(pitch) if pitch is not None else None
         self.target_band_candidates = (
             [int(b) for b in target_band_candidates]
@@ -105,7 +127,23 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
         self.overlap_penalty_weight = float(overlap_penalty_weight)
         self.target_cost = float(target_cost) if target_cost is not None else None
         self.symmetry_group = symmetry_group
-        self.bypass_irrep_identification = bool(bypass_irrep_identification)
+        self.enforce_irreps = bool(enforce_irreps)
+        if target_irreps is not None:
+            self.target_irreps: list[str] | None = [str(irr) for irr in target_irreps]
+        elif (
+            self.enforce_irreps
+            and self.symmetry_group == "C6v"
+            and len(self.ref_bands) == 3
+        ):
+            self.target_irreps = ["A_2", "E_1", "E_1"]
+        else:
+            self.target_irreps = None
+        self.irrep_penalty_weight = float(irrep_penalty_weight)
+        self.bypass_irrep_identification = (
+            False if self.enforce_irreps else bool(bypass_irrep_identification)
+        )
+        self.tracking_strategy = tracking_strategy.lower()
+        self.tracking_kwargs = dict(tracking_kwargs) if tracking_kwargs else {}
 
         # 1. Resolve reference fields and frequencies
         if ref_fields is not None:
@@ -118,6 +156,7 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
                     field=field,
                     slab_thickness=slab_thickness,
                     z_center=z_center,
+                    overlap_mode=overlap_mode,
                 )
                 for b in self.ref_bands
             }
@@ -209,6 +248,41 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
             )
             norm_h = float(h_val) / max(pitch_val, 1e-12) if h_val is not None else None
 
+        band_irreps: dict[int, str] = {}
+        if self.enforce_irreps:
+            symmetries_data = solver_results.get("symmetries", {})
+            sym_records = []
+            if isinstance(symmetries_data, dict):
+                sym_records = symmetries_data.get(
+                    pol_key, symmetries_data.get("all", [])
+                )
+            elif isinstance(symmetries_data, list):
+                sym_records = symmetries_data
+
+            if not sym_records and hasattr(ms, "compute_symmetry"):
+                from phc_mpb.symmetry import compute_band_symmetries
+
+                sym_records = compute_band_symmetries(
+                    ms,
+                    symmetry_group=self.symmetry_group,
+                    target_irreps=self.target_irreps,
+                )
+            elif sym_records and self.target_irreps:
+                from phc_mpb.symmetry import resolve_multiplet_symmetries
+
+                sym_records = resolve_multiplet_symmetries(
+                    sym_records,
+                    symmetry_group=self.symmetry_group,
+                    target_irreps=self.target_irreps,
+                )
+
+            if sym_records:
+                band_irreps = {
+                    int(s["band"]): str(s.get("irrep", "Unknown"))
+                    for s in sym_records
+                    if "band" in s
+                }
+
         tracking_data = track_modes_by_overlap(
             ms_ref=self.ref_fields,
             ms_target=ms,
@@ -217,14 +291,23 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
             field=self.field,
             slab_thickness=norm_h,
             z_center=self.z_center,
+            overlap_mode=self.overlap_mode,
+            interpolate=self.interpolate,
             pitch=pitch_val,
             ref_frequencies=self.ref_frequencies,
             target_frequencies=gamma_freqs,
+            tracking_strategy=self.tracking_strategy,
+            band_irreps=band_irreps if band_irreps else None,
+            target_irreps=self.target_irreps,
+            enforce_irreps=self.enforce_irreps,
+            **self.tracking_kwargs,
         )
 
-        ranked_targets = tracking_data["ranked_target_bands"]
         k_modes = len(self.ref_bands)
-        tracked_bands = ranked_targets[:k_modes]
+        tracked_bands = (
+            tracking_data.get("tracked_bands")
+            or tracking_data["ranked_target_bands"][:k_modes]
+        )
         self._last_tracked_bands = list(tracked_bands)
 
         # 3. Retrieve frequencies for tracked bands
@@ -269,12 +352,28 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
                 self.min_overlap_threshold - mean_overlap
             )
 
+        # 5. Check irrep compliance of tracked modes
+        irrep_match = True
+        tracked_irreps: list[str] = []
+        if self.enforce_irreps and band_irreps and self.target_irreps:
+            from collections import Counter
+
+            from phc_mpb.classification import resolve_target_irrep_counts
+
+            target_counts = resolve_target_irrep_counts(self.target_irreps, k_modes)
+            tracked_irreps = [band_irreps.get(b, "Unknown") for b in tracked_bands]
+            if Counter(tracked_irreps) != target_counts:
+                irrep_match = False
+                effective_cost += self.irrep_penalty_weight
+        elif band_irreps:
+            tracked_irreps = [band_irreps.get(b, "Unknown") for b in tracked_bands]
+
         if self.target_cost is not None and effective_cost < self.target_cost:
             final_cost = self.target_cost
         else:
             final_cost = effective_cost
 
-        fom = 1.0 / max(normalized_cost, 1e-12)
+        fom = 1.0 / max(final_cost, 1e-12)
 
         # Optional group velocity extraction
         vg_top_band: float | None = None
@@ -293,6 +392,8 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
 
         metadata = {
             "target_bands": tracked_bands,
+            "tracked_irreps": tracked_irreps,
+            "irrep_match": irrep_match,
             "raw_cost": raw_cost,
             "normalized_cost": normalized_cost,
             "effective_cost": final_cost,
@@ -307,10 +408,17 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
             "best_matches": tracking_data["best_matches"],
         }
 
-        status_msg = (
-            f"Tracked bands {sorted(tracked_bands)} (splitting: {normalized_cost:.4e}, "
-            f"overlap: {mean_overlap:.3f})"
-        )
+        if not irrep_match:
+            status_msg = (
+                f"PENALIZED (Irrep mismatch: {tracked_irreps} != {list(self.target_irreps or [])}, "
+                f"splitting: {normalized_cost:.4e})"
+            )
+        else:
+            status_msg = (
+                f"Tracked bands {sorted(tracked_bands)} "
+                f"({'+'.join(tracked_irreps) if tracked_irreps else 'matched'}, "
+                f"splitting: {normalized_cost:.4e}, overlap: {mean_overlap:.3f})"
+            )
 
         return ObjectiveEvaluation(
             cost=final_cost,
@@ -318,4 +426,5 @@ class ModalOverlapDegeneracyObjective(BaseObjective):
             status=status_msg,
             metadata=metadata,
             group_velocity=vg_top_band,
+            is_penalty=(not irrep_match),
         )

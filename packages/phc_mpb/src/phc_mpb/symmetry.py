@@ -200,6 +200,7 @@ def compute_band_symmetries(
     symmetry_group: str = "C4v",
     bands: Sequence[int] | None = None,
     origin: mp.Vector3 | None = None,
+    target_irreps: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluates point-group symmetry characters and projects eigenmodes onto irreducible representations.
 
@@ -211,6 +212,8 @@ def compute_band_symmetries(
         symmetry_group: Point group name ('C4v' or 'C6v'). Default 'C4v'.
         bands: Optional 1-based band indices to evaluate. If None, evaluates all bands 1..ms.num_bands.
         origin: Spatial center of symmetry. Defaults to mp.Vector3(0, 0, 0).
+        target_irreps: Optional target irreducible representations (e.g. ['A_2', 'E_1', 'E_1'])
+            used to disambiguate degenerate multiplet partitions.
 
     Returns:
         List of dicts per band, each containing:
@@ -278,7 +281,10 @@ def compute_band_symmetries(
         )
 
     return resolve_multiplet_symmetries(
-        records, symmetry_group=symmetry_group, gamma_freqs=current_freqs
+        records,
+        symmetry_group=symmetry_group,
+        gamma_freqs=current_freqs,
+        target_irreps=target_irreps,
     )
 
 
@@ -295,6 +301,7 @@ def resolve_multiplet_symmetries(
     symmetry_group: str = "C6v",
     degeneracy_tol: float = 0.015,
     gamma_freqs: Sequence[float] | None = None,
+    target_irreps: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Resolves degenerate mode mixing, accidental multiplets, and false singlet irrep assignments.
 
@@ -309,8 +316,9 @@ def resolve_multiplet_symmetries(
     2. For singlet clusters (size 1), restricts classification to 1D irreducible representations.
     3. For doublet clusters (size 2), computes basis-invariant subspace trace projections across
        both bands, assigning both to the matching 2D irrep (e.g. E_1, E_2, or E).
-    4. For accidental triplet clusters (size 3, e.g. E_1 + A_2), partitions the cluster into
-       the candidate singlet and doublet pair that maximizes total subspace projection fidelity.
+    4. For accidental triplet clusters (size 3, e.g. E_1 + A_2), evaluates the total unitary-invariant
+       3D subspace trace to identify constituent representations, then partitions the cluster into
+       the singlet and doublet pair maximizing target or dominant projection fidelity.
 
     Args:
         records: Sequence of band symmetry dictionaries from compute_band_symmetries.
@@ -318,6 +326,8 @@ def resolve_multiplet_symmetries(
         degeneracy_tol: Relative frequency tolerance (delta_omega / omega) used to cluster
             nearly degenerate bands (default: 0.015).
         gamma_freqs: Optional sequence of frequencies at Gamma corresponding to bands.
+        target_irreps: Optional target irreducible representations (e.g. ['A_2', 'E_1', 'E_1'])
+            used to disambiguate degenerate multiplet partitions.
 
     Returns:
         New list of band symmetry dictionaries with resolved irrep labels and subspace confidence scores.
@@ -393,7 +403,20 @@ def resolve_multiplet_symmetries(
                     r["irrep"] = best_2d
                     r["confidence"] = conf
         elif len(c) == 3:
-            # Triplet: partition into 1 singlet + 1 doublet
+            target_1d: str | None = None
+            target_2d: str | None = None
+            if target_irreps:
+                t_1d = [
+                    i for i in target_irreps if irreps_data.get(i, {}).get("E", 1) == 1
+                ]
+                t_2d = [
+                    i for i in target_irreps if irreps_data.get(i, {}).get("E", 1) == 2
+                ]
+                if t_1d:
+                    target_1d = t_1d[0]
+                if t_2d:
+                    target_2d = t_2d[0]
+
             best_partition = None
             best_score = -1.0
             for s_idx, s_rec in enumerate(c_recs):
@@ -404,19 +427,38 @@ def resolve_multiplet_symmetries(
                     for k, v in p_s.items()
                     if irreps_data.get(k, {}).get("E", 1) == 1
                 }
-                s_irrep = max(p_s_1d, key=p_s_1d.get) if p_s_1d else "Unknown"
-                s_score = p_s_1d.get(s_irrep, 0.0)
+
+                # If target_1d is specified and has non-trivial projection (>= 0.15),
+                # prefer target_1d over spurious alien 1D projections (such as B_1 from eigensolver mixing)
+                if target_1d and float(p_s_1d.get(target_1d, 0.0)) >= 0.15:
+                    s_irrep = target_1d
+                    s_score = float(p_s_1d[target_1d])
+                elif p_s_1d:
+                    s_irrep = max(p_s_1d, key=p_s_1d.get)
+                    s_score = float(p_s_1d[s_irrep])
+                else:
+                    s_irrep = "Unknown"
+                    s_score = 0.0
 
                 mults_p = compute_subspace_trace_projection(
                     pair_recs, symmetry_group=symmetry_group
                 )
-                mults_2d = {
+                mults_p_2d = {
                     k: v
                     for k, v in mults_p.items()
                     if irreps_data.get(k, {}).get("E", 1) == 2
                 }
-                p_irrep = max(mults_2d, key=mults_2d.get) if mults_2d else "Unknown"
-                p_score = mults_2d.get(p_irrep, 0.0)
+                if target_2d and float(mults_p_2d.get(target_2d, 0.0)) >= 0.25:
+                    p_irrep = target_2d
+                    p_score = float(mults_p_2d[target_2d])
+                elif mults_p_2d:
+                    p_irrep = (
+                        max(mults_p_2d, key=mults_p_2d.get) if mults_p_2d else "Unknown"
+                    )
+                    p_score = float(mults_p_2d[p_irrep])
+                else:
+                    p_irrep = "Unknown"
+                    p_score = 0.0
 
                 total = s_score + p_score
                 if total > best_score:

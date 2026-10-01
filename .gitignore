@@ -37,3 +37,10 @@ multirun/
 *.swp
 *.swo
 .DS_Store
+
+# DTU HPC LSF Job Submissions & Logs
+scripts/submit_dtu_hpc.sh
+logs/
+*.out
+*.err
+

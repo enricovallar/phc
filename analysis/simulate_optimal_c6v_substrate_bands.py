@@ -161,7 +161,9 @@ def run_normal_te_symmetry_analysis(
         print("\n" + "=" * 76)
         print("  1. NORMAL TE IMPLEMENTATION (z-even) — Air-Clad Reference Membrane")
         print("=" * 76)
-        print(f"  {'Band':<6} | {'omega~':<8} | {'lambda (nm)':<12} | {'Irrep':<6} | {'Confidence':<10} | Projections")
+        print(
+            f"  {'Band':<6} | {'omega~':<8} | {'lambda (nm)':<12} | {'Irrep':<6} | {'Confidence':<10} | Projections"
+        )
         print("  " + "-" * 72)
         for b_idx, f in enumerate(air_freqs):
             b = b_idx + 1
@@ -171,7 +173,9 @@ def run_normal_te_symmetry_analysis(
             conf = s_rec.get("confidence", 0.0) if s_rec else 0.0
             projs = s_rec.get("projections", {}) if s_rec else {}
             flag = " <--- TARGET BAND" if b in (9, 10, 11) else ""
-            print(f"  {b:<6d} | {f:<8.5f} | {lam:<12.2f} | {irrep:<6s} | {conf:<10.3f} | {projs}{flag}")
+            print(
+                f"  {b:<6d} | {f:<8.5f} | {lam:<12.2f} | {irrep:<6s} | {conf:<10.3f} | {projs}{flag}"
+            )
 
     # 2. SiO2 Substrate (polarization="all", broken z-parity)
     geom_sub = gds_to_mpb_geometry(
@@ -208,9 +212,13 @@ def run_normal_te_symmetry_analysis(
 
     if verbose:
         print("\n" + "=" * 76)
-        print("  2. OPTIMAL POINT ON SiO2 SUBSTRATE (polarization='all') — Target Modes at Γ")
+        print(
+            "  2. OPTIMAL POINT ON SiO2 SUBSTRATE (polarization='all') — Target Modes at Γ"
+        )
         print("=" * 76)
-        print(f"  {'Band':<6} | {'omega~':<8} | {'lambda (nm)':<12} | {'Irrep':<6} | {'Confidence':<10} | Projections")
+        print(
+            f"  {'Band':<6} | {'omega~':<8} | {'lambda (nm)':<12} | {'Irrep':<6} | {'Confidence':<10} | Projections"
+        )
         print("  " + "-" * 72)
         for b_idx, f in enumerate(sub_freqs):
             b = b_idx + 1
@@ -220,7 +228,9 @@ def run_normal_te_symmetry_analysis(
             conf = s_rec.get("confidence", 0.0) if s_rec else 0.0
             projs = s_rec.get("projections", {}) if s_rec else {}
             flag = " <--- ACCIDENTAL DEGENERACY" if b in (16, 17, 18) else ""
-            print(f"  {b:<6d} | {f:<8.5f} | {lam:<12.2f} | {irrep:<6s} | {conf:<10.3f} | {projs}{flag}")
+            print(
+                f"  {b:<6d} | {f:<8.5f} | {lam:<12.2f} | {irrep:<6s} | {conf:<10.3f} | {projs}{flag}"
+            )
         print("=" * 76 + "\n")
 
     return {
@@ -356,7 +366,9 @@ def run_optimal_band_structure_simulation(
 
     # 3. Solve band structure (polarization='all' for asymmetric slab)
     if verbose:
-        print(f"  Solving {len(k_points)} k-points with {num_bands} bands ({num_workers} workers)...")
+        print(
+            f"  Solving {len(k_points)} k-points with {num_bands} bands ({num_workers} workers)..."
+        )
     t_solve = time.time()
     with silence_c_stdout():
         results = run_band_solver(
@@ -421,7 +433,7 @@ def run_optimal_band_structure_simulation(
         results=results,
         node_labels=labels,
         node_indices=indices,
-        title=f"Optimal C6v Dispersion — λ (nm) [SiO₂ Substrate, h={slab_thickness*1e3:.0f} nm]",
+        title=f"Optimal C6v Dispersion — λ (nm) [SiO₂ Substrate, h={slab_thickness * 1e3:.0f} nm]",
         normalize=False,
         pitch=pitch,
         lam_min=0.35,
@@ -429,7 +441,9 @@ def run_optimal_band_structure_simulation(
         plot_gaps=False,
     )
     wave_band_file = output_mgr.save_figure(
-        fig_wave, artifact_key="band_plot_wavelength", filename="band_structure_wavelength.png"
+        fig_wave,
+        artifact_key="band_plot_wavelength",
+        filename="band_structure_wavelength.png",
     )
     plt.close(fig_wave)
 
@@ -480,10 +494,18 @@ def run_optimal_band_structure_simulation(
         }
         if verbose:
             print("\n  Degenerate Cluster at Γ:")
-            print(f"    Band 16: omega~ = {b16:.5f} (lambda = {pitch/b16*1e3:.2f} nm)")
-            print(f"    Band 17: omega~ = {b17:.5f} (lambda = {pitch/b17*1e3:.2f} nm)")
-            print(f"    Band 18: omega~ = {b18:.5f} (lambda = {pitch/b18*1e3:.2f} nm)")
-            print(f"    Delta omega~ = {split:.6f} ({split/mid*100:.3f}% splitting)")
+            print(
+                f"    Band 16: omega~ = {b16:.5f} (lambda = {pitch / b16 * 1e3:.2f} nm)"
+            )
+            print(
+                f"    Band 17: omega~ = {b17:.5f} (lambda = {pitch / b17 * 1e3:.2f} nm)"
+            )
+            print(
+                f"    Band 18: omega~ = {b18:.5f} (lambda = {pitch / b18 * 1e3:.2f} nm)"
+            )
+            print(
+                f"    Delta omega~ = {split:.6f} ({split / mid * 100:.3f}% splitting)"
+            )
 
     # 8. Save structured results JSON summary
     t_total = time.time() - t0
@@ -558,14 +580,32 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--quick", action="store_true", help="Rapid smoke test mode.")
-    parser.add_argument("--check-symmetries", action="store_true", help="Run normal TE symmetry checks.")
-    parser.add_argument("--all", action="store_true", help="Run both band simulation and symmetry checks.")
-    parser.add_argument("--resolution", type=int, default=24, help="In-plane grid resolution.")
-    parser.add_argument("--resolution-z", type=int, default=20, help="Vertical grid resolution.")
-    parser.add_argument("--num-bands", type=int, default=22, help="Number of eigenbands.")
-    parser.add_argument("--k-density", type=int, default=12, help="K-path interpolation density.")
-    parser.add_argument("--workers", type=int, default=4, help="Parallel worker processes.")
-    parser.add_argument("--output-dir", type=str, default=None, help="Custom output directory.")
+    parser.add_argument(
+        "--check-symmetries", action="store_true", help="Run normal TE symmetry checks."
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Run both band simulation and symmetry checks.",
+    )
+    parser.add_argument(
+        "--resolution", type=int, default=24, help="In-plane grid resolution."
+    )
+    parser.add_argument(
+        "--resolution-z", type=int, default=20, help="Vertical grid resolution."
+    )
+    parser.add_argument(
+        "--num-bands", type=int, default=22, help="Number of eigenbands."
+    )
+    parser.add_argument(
+        "--k-density", type=int, default=12, help="K-path interpolation density."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=4, help="Parallel worker processes."
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default=None, help="Custom output directory."
+    )
 
     args = parser.parse_args()
 

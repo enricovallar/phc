@@ -50,6 +50,7 @@ def fit_clean_surrogate(
     objective_mode: str = "log",
     cost_cutoff: float = 0.5,
     min_clean_points: int = 8,
+    filter_outliers: bool = False,
     random_state: int = 42,
 ) -> GaussianProcessRegressor | None:
     """Fits a clean Gaussian Process regressor exclusively on unpenalized physical points.
@@ -66,6 +67,8 @@ def fit_clean_surrogate(
         objective_mode: 'log' (fits log10(cost)) or 'linear'.
         cost_cutoff: Cost ceiling below which points are considered valid physical states.
         min_clean_points: Minimum number of physical points required to perform re-fitting.
+        filter_outliers: If True, filters isolated tracking outliers relative to spatial k-NN
+            (disabled by default, defaults to False).
         random_state: Random seed for hyperparameter optimization restarts.
 
     Returns:
@@ -92,6 +95,25 @@ def fit_clean_surrogate(
     if len(clean_x) < min_clean_points:
         return None
 
+    if filter_outliers and len(clean_x) >= 15:
+        arr_x = np.array(clean_x)
+        arr_y = np.array(clean_y)
+        x_min = np.min(arr_x, axis=0)
+        x_max = np.max(arr_x, axis=0)
+        scale = np.maximum(x_max - x_min, 1e-12)
+        norm_x = (arr_x - x_min) / scale
+
+        filtered_idx = []
+        for i in range(len(arr_x)):
+            dists = np.linalg.norm(norm_x - norm_x[i], axis=1)
+            nbr_indices = np.argsort(dists)[1:4]
+            local_median = float(np.median(arr_y[nbr_indices]))
+            if (arr_y[i] - local_median) < 1.2:
+                filtered_idx.append(i)
+        if len(filtered_idx) >= min_clean_points:
+            clean_x = [clean_x[i] for i in filtered_idx]
+            clean_y = [clean_y[i] for i in filtered_idx]
+
     try:
         kernel = Matern(
             length_scale=0.035, length_scale_bounds=(0.01, 0.25), nu=2.5
@@ -117,6 +139,7 @@ def predict_surrogate_landscape(
     clean_refit: bool = True,
     cost_cutoff: float = 0.5,
     min_clean_points: int = 8,
+    filter_outliers: bool = False,
     include_uncertainty: bool = True,
     objective_mode: str = "log",
     random_state: int = 42,
@@ -136,6 +159,7 @@ def predict_surrogate_landscape(
         clean_refit: Whether to attempt fitting a clean GP on penalty-filtered points.
         cost_cutoff: Cost threshold for clean GP filtering (default: 0.5).
         min_clean_points: Minimum unpenalized points to fit clean GP (default: 8).
+        filter_outliers: If True, filters isolated tracking outliers during clean GP re-fitting (default: False).
         include_uncertainty: If True, evaluates expected cost under Log-Normal distribution
             E[C] = 10^(mu + (ln(10)/2) * sigma^2). If False, evaluates deterministic mean 10^mu.
         objective_mode: 'log' or 'linear'.
@@ -169,6 +193,7 @@ def predict_surrogate_landscape(
             objective_mode=objective_mode,
             cost_cutoff=cost_cutoff,
             min_clean_points=min_clean_points,
+            filter_outliers=filter_outliers,
             random_state=random_state,
         )
 
